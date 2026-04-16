@@ -148,6 +148,7 @@ function BlacklistTab({config:c,save}){
 function ConvertTab({config:c}){
   const[ups,sUps]=useState({});
   const[mpC,sMpC]=useState(c.marketplaces[0]?.code||"");
+  const[qtyMode,sQtyMode]=useState("catalog");
   const[res,sRes]=useState(null);
 
   const hFile=useCallback((sn,file)=>{if(!file)return;sRes(null);const r=new FileReader();r.onload=e=>{sUps(p=>({...p,[sn]:{fn:file.name,d:e.target.result}}))};r.readAsText(file,"utf-8")},[]);
@@ -185,7 +186,7 @@ function ConvertTab({config:c}){
     const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
     for(const it of sorted){
       let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
-      const qty=it.stock!==null?String(it.stock):String(mp.quantity);
+      const qty=qtyMode==="fixed"?String(mp.quantity):(it.stock!==null?String(it.stock):String(mp.quantity));
       ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
       sc[it.supplier]=(sc[it.supplier]||0)+1;
     }
@@ -200,6 +201,17 @@ function ConvertTab({config:c}){
 
   return<div>
     <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null)}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
+    <Card>
+      <label style={S.label}>Sorgente quantità</label>
+      <div style={{display:"flex",gap:12,marginTop:6}}>
+        {[{v:"catalog",l:"📦 Quantità dal catalogo",d:"Usa la colonna stock del fornitore (fallback: quantità marketplace)"},{v:"fixed",l:"🔒 Quantità fissa marketplace",d:"Usa sempre la quantità configurata nel marketplace"}].map(o=>
+          <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null)}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid #2a2a4a",background:qtyMode===o.v?"#1e1e3e":"#0f0f1e",cursor:"pointer",transition:"all .15s"}}>
+            <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"#a5b4fc":"#7a7a9a"}}>{o.l}</div>
+            <div style={{fontSize:11,color:"#5a5a7a",marginTop:4}}>{o.d}</div>
+          </div>)}
+      </div>
+      {qtyMode==="catalog"&&!c.suppliers.some(s=>s.stockCol)&&<p style={{color:"#f59e0b",fontSize:12,margin:"8px 0 0"}}>⚠️ Nessun fornitore ha una colonna stock configurata — verrà usata la quantità del marketplace come fallback.</p>}
+    </Card>
     <div style={{marginBottom:14}}>
       <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
       {c.suppliers.map(sup=>{const u=ups[sup.name];return<Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
