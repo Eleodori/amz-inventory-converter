@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amazon Inventory Converter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f1e;color:#e0e0f0;font-family:'DM Sans',sans-serif;min-height:100vh}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#1a1a2e}::-webkit-scrollbar-thumb{background:#3a3a5a;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback}=React;
+const STORE_KEY="amz-conv-v3";
+const DEFAULT={suppliers:[],marketplaces:[],blacklist:[]};
+const EU_MP=[
+  {code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
+  {code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
+  {code:"NL",name:"Amazon.nl",cur:"EUR"},{code:"BE",name:"Amazon.com.be",cur:"EUR"},
+  {code:"PL",name:"Amazon.pl",cur:"PLN"},{code:"SE",name:"Amazon.se",cur:"SEK"},
+  {code:"UK",name:"Amazon.co.uk",cur:"GBP"}
+];
+
+function load(){try{return JSON.parse(localStorage.getItem(STORE_KEY))||DEFAULT}catch{return DEFAULT}}
+function persist(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
+function parseCSV(t,d){const ls=t.split(/\r?\n/).filter(l=>l.trim());if(ls.length<2)return{h:[],r:[]};const h=ls[0].split(d).map(x=>x.trim());const r=ls.slice(1).map(l=>{const c=l.split(d);const o={};h.forEach((k,i)=>o[k]=(c[i]||"").trim());return o});return{h,r}}
+function fCol(hs,n){return hs.find(h=>h.toLowerCase()===n.toLowerCase())}
+
+const S={
+  card:{background:"#1a1a2e",border:"1px solid #2a2a4a",borderRadius:12,padding:20,marginBottom:14},
+  label:{display:"block",fontSize:11,color:"#7a7a9a",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
+  input:{width:"100%",padding:"8px 12px",background:"#0f0f1e",border:"1px solid #3a3a5a",borderRadius:8,color:"#e0e0f0",fontSize:14,boxSizing:"border-box"},
+  badge:bg=>({background:bg||"#334155",color:"#fff",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
+};
+function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
+function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
+function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
+function Btn({children,onClick,v="pri",style,disabled}){
+  const bg={pri:"#6366f1",ok:"#10b981",danger:"#ef4444",ghost:"transparent"}[v];
+  const bd=v==="ghost"?"1px solid #3a3a5a":"none";
+  const cl=v==="ghost"?"#8888cc":"#fff";
+  return<button onClick={onClick} disabled={disabled} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",...style}}>{children}</button>
+}
+
+function SuppliersTab({config:c,save}){
+  const[ed,sEd]=useState(null);
+  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",markupPct:10,flatFee:10});
+  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",markupPct:10,flatFee:10});sEd("new")};
+  const ed2=(i)=>{sF({...c.suppliers[i],stockCol:c.suppliers[i].stockCol||""});sEd(i)};
+  const sv=()=>{if(!f.name||!f.skuCol||!f.eanCol||!f.priceCol)return;const s={...f,markupPct:parseFloat(f.markupPct)||0,flatFee:parseFloat(f.flatFee)||0};const l=[...c.suppliers];ed==="new"?l.push(s):(l[ed]=s);save({...c,suppliers:l});sEd(null)};
+  const rm=i=>save({...c,suppliers:c.suppliers.filter((_,j)=>j!==i)});
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"#e0e0f0",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+    </div>
+    {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"#5a5a7a",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
+    {c.suppliers.map((s,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
+      <strong style={{color:"#e0e0f0",fontSize:15}}>{s.name}</strong>
+      <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
+        <span style={S.badge("#1e3a5f")}>SKU: {s.skuCol}</span><span style={S.badge("#1e3a5f")}>EAN: {s.eanCol}</span>
+        <span style={S.badge("#1e3a5f")}>Prezzo: {s.priceCol}</span>
+        {s.stockCol&&<span style={S.badge("#1e3a5f")}>Stock: {s.stockCol}</span>}
+        <span style={S.badge("#065f46")}>+{s.markupPct}% + {s.flatFee}€</span>
+      </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
+    {ed!==null&&<Card accent="#6366f1">
+      <h4 style={{color:"#a5b4fc",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
+        <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
+        <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
+        <Inp label="Colonna SKU" value={f.skuCol} onChange={e=>sF({...f,skuCol:e.target.value})} placeholder="es. Article"/>
+        <Inp label="Colonna EAN" value={f.eanCol} onChange={e=>sF({...f,eanCol:e.target.value})} placeholder="es. EAN"/>
+        <Inp label="Colonna Prezzo" value={f.priceCol} onChange={e=>sF({...f,priceCol:e.target.value})} placeholder="es. Price"/>
+        <Inp label="Colonna Stock (quantità)" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
+        <Inp label="Ricarico %" type="number" value={f.markupPct} onChange={e=>sF({...f,markupPct:e.target.value})}/>
+        <Inp label="Costo fisso aggiuntivo (€)" type="number" value={f.flatFee} onChange={e=>sF({...f,flatFee:e.target.value})}/>
+      </div>
+      <p style={{color:"#5a5a7a",fontSize:12,margin:"6px 0"}}>Formula: (prezzo × {(1+(parseFloat(f.markupPct)||0)/100).toFixed(2)}) + {parseFloat(f.flatFee)||0}€</p>
+      <p style={{color:"#5a5a7a",fontSize:12,margin:"0 0 6px"}}>Stock: {f.stockCol?"la quantità verrà presa dalla colonna "+f.stockCol+" del fornitore vincente":"quantità fissa dal marketplace (se non imposti una colonna stock)"}</p>
+      <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+    </Card>}
+  </div>
+}
+
+function MarketplacesTab({config:c,save}){
+  const[ed,sEd]=useState(null);
+  const[f,sF]=useState({code:"IT",quantity:8,leadtime:4});
+  const nw=()=>{sF({code:"IT",quantity:8,leadtime:4});sEd("new")};
+  const ed2=i=>{sF({...c.marketplaces[i]});sEd(i)};
+  const sv=()=>{const m={...f,quantity:parseInt(f.quantity)||8,leadtime:parseInt(f.leadtime)||4};const l=[...c.marketplaces];ed==="new"?l.push(m):(l[ed]=m);save({...c,marketplaces:l});sEd(null)};
+  const rm=i=>save({...c,marketplaces:c.marketplaces.filter((_,j)=>j!==i)});
+  const info=code=>EU_MP.find(m=>m.code===code)||{name:code};
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"#e0e0f0",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+    </div>
+    {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"#5a5a7a",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
+    {c.marketplaces.map((m,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
+      <strong style={{color:"#e0e0f0",fontSize:15}}>{info(m.code).name}</strong>
+      <div style={{marginTop:6,display:"flex",gap:6}}>
+        <span style={S.badge("#334155")}>Qty fallback: {m.quantity}</span><span style={S.badge("#334155")}>Lead: {m.leadtime}gg</span>
+      </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
+    {ed!==null&&<Card accent="#6366f1">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 14px"}}>
+        <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
+        <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
+        <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
+      </div>
+      <p style={{color:"#5a5a7a",fontSize:12,margin:"4px 0"}}>La quantità fallback viene usata solo se il fornitore non ha una colonna stock configurata.</p>
+      <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+    </Card>}
+  </div>
+}
+
+function BlacklistTab({config:c,save}){
+  const[inp,sInp]=useState("");
+  const add=()=>{const ne=inp.split(/[\n,;\s]+/).map(e=>e.trim()).filter(e=>e.length>=8&&!c.blacklist.includes(e));if(!ne.length)return;save({...c,blacklist:[...c.blacklist,...ne]});sInp("")};
+  const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)});
+  const clr=()=>save({...c,blacklist:[]});
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"#e0e0f0",fontSize:17}}>Blacklist EAN <span style={{color:"#5a5a7a",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
+      {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
+    </div>
+    <Card>
+      <label style={S.label}>Aggiungi EAN (uno per riga o separati da virgola)</label>
+      <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620"} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
+      <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
+    </Card>
+    {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
+      {c.blacklist.map(ean=><span key={ean} style={{background:"#2a1a1a",border:"1px solid #5a2a2a",color:"#f87171",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
+        {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+      </span>)}
+    </div></Card>}
+  </div>
+}
+
+function ConvertTab({config:c}){
+  const[ups,sUps]=useState({});
+  const[mpC,sMpC]=useState(c.marketplaces[0]?.code||"");
+  const[res,sRes]=useState(null);
+
+  const hFile=useCallback((sn,file)=>{if(!file)return;sRes(null);const r=new FileReader();r.onload=e=>{sUps(p=>({...p,[sn]:{fn:file.name,d:e.target.result}}))};r.readAsText(file,"utf-8")},[]);
+  const rmUp=n=>{sUps(p=>{const x={...p};delete x[n];return x});sRes(null)};
+
+  const convert=()=>{
+    const mp=c.marketplaces.find(m=>m.code===mpC);if(!mp)return;
+    const bl=new Set(c.blacklist);const em={};
+    let tR=0,tS=0,dup=0,blk=0;const errs=[];
+
+    for(const[sn,up]of Object.entries(ups)){
+      const sup=c.suppliers.find(s=>s.name===sn);if(!sup)continue;
+      const{h,r}=parseCSV(up.d,sup.delimiter);
+      const skC=fCol(h,sup.skuCol),enC=fCol(h,sup.eanCol),prC=fCol(h,sup.priceCol);
+      const stC=sup.stockCol?fCol(h,sup.stockCol):null;
+      if(!skC||!enC||!prC){const ms=[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean);errs.push(sn+": colonne non trovate: "+ms.join(", "));continue}
+      if(sup.stockCol&&!stC){errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata");continue}
+
+      for(const row of r){
+        tR++;
+        const ean=(row[enC]||"").trim(),sku=(row[skC]||"").trim();
+        const rp=parseFloat((row[prC]||"0").replace(",","."));
+        if(!ean||ean.length<8||!sku||isNaN(rp)||rp<=0){tS++;continue}
+        if(bl.has(ean)){blk++;continue}
+        const fp=rp*(1+sup.markupPct/100)+sup.flatFee;
+        const stock=stC?parseInt(row[stC])||0:null;
+        if(em[ean]){dup++;if(fp<em[ean].price)em[ean]={sku,ean,price:fp,supplier:sn,stock}}
+        else em[ean]={sku,ean,price:fp,supplier:sn,stock}
+      }
+    }
+    if(errs.length){sRes({error:errs.join("\n")});return}
+
+    const hd="sku\tproduct-id\tproduct-id-type\tprice\titem-condition\tquantity\tadd-delete\tleadtime-to-ship";
+    const ls=[hd];const sc={};
+    const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
+    for(const it of sorted){
+      let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
+      const qty=it.stock!==null?String(it.stock):String(mp.quantity);
+      ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
+      sc[it.supplier]=(sc[it.supplier]||0)+1;
+    }
+    const ct=ls.join("\r\n")+"\r\n";
+    sRes({content:ct,total:sorted.length,totalRead:tR,totalSkipped:tS,duplicatesResolved:dup,blacklisted:blk,supplierCounts:sc});
+  };
+
+  const dl=()=>{if(!res?.content)return;const b=new Blob([res.content],{type:"text/plain;charset=utf-8"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="InventoryLoader_merged_"+mpC+"_"+new Date().toISOString().slice(0,10)+".txt";document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u)};
+
+  if(!c.suppliers.length||!c.marketplaces.length)return<Card><p style={{color:"#f59e0b",textAlign:"center",margin:0}}>⚠️ Configura almeno un fornitore e un marketplace.</p></Card>;
+  const uc=Object.keys(ups).length;
+
+  return<div>
+    <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null)}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
+    <div style={{marginBottom:14}}>
+      <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
+      {c.suppliers.map(sup=>{const u=ups[sup.name];return<Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8}}>
+          <strong style={{color:"#e0e0f0",fontSize:14}}>{sup.name}</strong>
+          <span style={S.badge("#065f46")}>+{sup.markupPct}% + {sup.flatFee}€</span>
+          {sup.stockCol&&<span style={S.badge("#1e3a5f")}>Stock: {sup.stockCol}</span>}
+        </div>{u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}</div>
+        <div style={{display:"flex",gap:6}}>
+          {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
+          <label style={{padding:"8px 16px",borderRadius:8,background:u?"#2a2a4a":"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+            {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
+          </label>
+        </div>
+      </Card>})}
+    </div>
+    <div style={{textAlign:"center",marginBottom:14}}>
+      <Btn v="ok" onClick={convert} disabled={uc===0} style={{padding:"12px 40px",fontSize:15}}>⚡ Genera file unificato ({uc} {uc===1?"fornitore":"fornitori"})</Btn>
+    </div>
+    {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
+    {res?.content&&<Card accent="#10b981">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+        <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
+        <Btn v="ok" onClick={dl} style={{fontSize:14}}>↓ Scarica .txt</Btn>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
+        {[["Prodotti nel file",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>
+          <div key={l} style={{background:"#0f0f1e",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:700,color:"#e0e0f0"}}>{v.toLocaleString()}</div>
+            <div style={{fontSize:11,color:"#7a7a9a",marginTop:2}}>{l}</div>
+          </div>)}
+      </div>
+      <label style={{...S.label,marginBottom:8}}>Prodotti per fornitore (vincenti)</label>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {Object.entries(res.supplierCounts).map(([n,ct])=><div key={n} style={{background:"#0f0f1e",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+          <strong style={{color:"#e0e0f0",fontSize:13}}>{n}</strong><span style={S.badge("#6366f1")}>{ct.toLocaleString()}</span>
+        </div>)}
+      </div>
+    </Card>}
+  </div>
+}
+
+function App(){
+  const[c,sC]=useState(DEFAULT);
+  const[tab,sTab]=useState("convert");
+  const[ok,sOk]=useState(false);
+  useEffect(()=>{sC(load());sOk(true)},[]);
+  const save=cfg=>{sC(cfg);persist(cfg)};
+  if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#5a5a7a"}}>Caricamento...</div>;
+  const tabs=[{id:"convert",label:"⚡ Converti"},{id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},{id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},{id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length}];
+  return<div>
+    <div style={{background:"linear-gradient(135deg,#1a1a3e 0%,#0f0f1e 100%)",borderBottom:"1px solid #2a2a4a",padding:"18px 24px"}}>
+      <h1 style={{margin:0,fontSize:20,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"#5a5a7a",fontWeight:400}}>v3</span></h1>
+      <p style={{margin:"3px 0 0",color:"#5a5a7a",fontSize:12}}>Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo</p>
+    </div>
+    <div style={{display:"flex",gap:0,borderBottom:"1px solid #2a2a4a",padding:"0 24px",overflowX:"auto"}}>
+      {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"11px 18px",background:"none",border:"none",color:tab===t.id?"#a5b4fc":"#5a5a7a",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:13,transition:"all .15s",whiteSpace:"nowrap"}}>
+        {t.label}{t.n!==undefined&&<span style={{marginLeft:5,background:"#2a2a4a",padding:"1px 7px",borderRadius:10,fontSize:10}}>{t.n}</span>}
+      </button>)}
+    </div>
+    <div style={{padding:24,maxWidth:820,margin:"0 auto"}}>
+      {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
+      {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
+      {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}
+      {tab==="convert"&&<ConvertTab config={c}/>}
+    </div>
+  </div>
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
