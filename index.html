@@ -10,8 +10,31 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0f0f1e;color:#e0e0f0;font-family:'DM Sans',sans-serif;min-height:100vh}
-::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#1a1a2e}::-webkit-scrollbar-thumb{background:#3a3a5a;border-radius:3px}
+body{font-family:'DM Sans',sans-serif;min-height:100vh;transition:background .2s,color .2s}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg-card)}::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:3px}
+body[data-theme="dark"]{
+  --bg:#0f0f1e;--bg-card:#1a1a2e;--bg-input:#0f0f1e;--bg-stat:#0f0f1e;
+  --bg-header-start:#1a1a3e;--bg-header-end:#0f0f1e;
+  --border:#2a2a4a;--border-input:#3a3a5a;
+  --text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
+  --tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
+  --ghost-border:#3a3a5a;--ghost-text:#8888cc;
+  --badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;
+  --bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
+  --accent-form:#a5b4fc;
+}
+body[data-theme="light"]{
+  --bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
+  --bg-header-start:#e8e8f4;--bg-header-end:#f4f4f8;
+  --border:#dcdce6;--border-input:#c8c8d6;
+  --text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
+  --tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
+  --ghost-border:#c8c8d6;--ghost-text:#4f46e5;
+  --badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;
+  --bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
+  --accent-form:#4f46e5;
+}
+body{background:var(--bg);color:var(--text)}
 @media(min-width:1024px){.app-content{max-width:960px!important}}
 @media(min-width:1280px){.app-content{max-width:1100px!important}}
 @media(min-width:1536px){.app-content{max-width:1300px!important}}
@@ -19,6 +42,7 @@ body{background:#0f0f1e;color:#e0e0f0;font-family:'DM Sans',sans-serif;min-heigh
 </style>
 </head>
 <body>
+<script>document.body.setAttribute("data-theme",localStorage.getItem("amz-theme")||"dark")</script>
 <div id="root"></div>
 <script type="text/babel">
 const {useState,useEffect,useCallback}=React;
@@ -38,18 +62,18 @@ function parseCSV(t,d){const ls=t.split(/\r?\n/).filter(l=>l.trim());if(ls.lengt
 function fCol(hs,n){return hs.find(h=>h.toLowerCase()===n.toLowerCase())}
 
 const S={
-  card:{background:"#1a1a2e",border:"1px solid #2a2a4a",borderRadius:12,padding:20,marginBottom:14},
-  label:{display:"block",fontSize:11,color:"#7a7a9a",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
-  input:{width:"100%",padding:"8px 12px",background:"#0f0f1e",border:"1px solid #3a3a5a",borderRadius:8,color:"#e0e0f0",fontSize:14,boxSizing:"border-box"},
-  badge:bg=>({background:bg||"#334155",color:"#fff",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
+  card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:14},
+  label:{display:"block",fontSize:11,color:"var(--text-label)",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
+  input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box"},
+  badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
 };
 function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
 function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
 function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
 function Btn({children,onClick,v="pri",style,disabled}){
   const bg={pri:"#6366f1",ok:"#10b981",danger:"#ef4444",ghost:"transparent"}[v];
-  const bd=v==="ghost"?"1px solid #3a3a5a":"none";
-  const cl=v==="ghost"?"#8888cc":"#fff";
+  const bd=v==="ghost"?"1px solid var(--ghost-border)":"none";
+  const cl=v==="ghost"?"var(--ghost-text)":"#fff";
   return<button onClick={onClick} disabled={disabled} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",...style}}>{children}</button>
 }
 
@@ -62,19 +86,19 @@ function SuppliersTab({config:c,save}){
   const rm=i=>save({...c,suppliers:c.suppliers.filter((_,j)=>j!==i)});
   return<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <h3 style={{margin:0,color:"#e0e0f0",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
     </div>
-    {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"#5a5a7a",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
+    {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
     {c.suppliers.map((s,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
-      <strong style={{color:"#e0e0f0",fontSize:15}}>{s.name}</strong>
+      <strong style={{color:"var(--text)",fontSize:15}}>{s.name}</strong>
       <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
-        <span style={S.badge("#1e3a5f")}>SKU: {s.skuCol}</span><span style={S.badge("#1e3a5f")}>EAN: {s.eanCol}</span>
-        <span style={S.badge("#1e3a5f")}>Prezzo: {s.priceCol}</span>
-        {s.stockCol&&<span style={S.badge("#1e3a5f")}>Stock: {s.stockCol}</span>}
-        <span style={S.badge("#065f46")}>+{s.markupPct}% + {s.flatFee}€</span>
+        <span style={S.badge("var(--badge-info)")}>SKU: {s.skuCol}</span><span style={S.badge("var(--badge-info)")}>EAN: {s.eanCol}</span>
+        <span style={S.badge("var(--badge-info)")}>Prezzo: {s.priceCol}</span>
+        {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
+        <span style={S.badge("var(--badge-ok)")}>+{s.markupPct}% + {s.flatFee}€</span>
       </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
     {ed!==null&&<Card accent="#6366f1">
-      <h4 style={{color:"#a5b4fc",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
+      <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
         <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
         <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
@@ -85,8 +109,8 @@ function SuppliersTab({config:c,save}){
         <Inp label="Ricarico %" type="number" value={f.markupPct} onChange={e=>sF({...f,markupPct:e.target.value})}/>
         <Inp label="Costo fisso aggiuntivo (€)" type="number" value={f.flatFee} onChange={e=>sF({...f,flatFee:e.target.value})}/>
       </div>
-      <p style={{color:"#5a5a7a",fontSize:12,margin:"6px 0"}}>Formula: (prezzo × {(1+(parseFloat(f.markupPct)||0)/100).toFixed(2)}) + {parseFloat(f.flatFee)||0}€</p>
-      <p style={{color:"#5a5a7a",fontSize:12,margin:"0 0 6px"}}>Stock: {f.stockCol?"la quantità verrà presa dalla colonna "+f.stockCol+" del fornitore vincente":"quantità fissa dal marketplace (se non imposti una colonna stock)"}</p>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"6px 0"}}>Formula: (prezzo × {(1+(parseFloat(f.markupPct)||0)/100).toFixed(2)}) + {parseFloat(f.flatFee)||0}€</p>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"0 0 6px"}}>Stock: {f.stockCol?"la quantità verrà presa dalla colonna "+f.stockCol+" del fornitore vincente":"quantità fissa dal marketplace (se non imposti una colonna stock)"}</p>
       <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
     </Card>}
   </div>
@@ -102,13 +126,13 @@ function MarketplacesTab({config:c,save}){
   const info=code=>EU_MP.find(m=>m.code===code)||{name:code};
   return<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <h3 style={{margin:0,color:"#e0e0f0",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
     </div>
-    {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"#5a5a7a",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
+    {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
     {c.marketplaces.map((m,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
-      <strong style={{color:"#e0e0f0",fontSize:15}}>{info(m.code).name}</strong>
+      <strong style={{color:"var(--text)",fontSize:15}}>{info(m.code).name}</strong>
       <div style={{marginTop:6,display:"flex",gap:6}}>
-        <span style={S.badge("#334155")}>Qty fallback: {m.quantity}</span><span style={S.badge("#334155")}>Lead: {m.leadtime}gg</span>
+        <span style={S.badge("var(--badge-neutral)")}>Qty fallback: {m.quantity}</span><span style={S.badge("var(--badge-neutral)")}>Lead: {m.leadtime}gg</span>
       </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
     {ed!==null&&<Card accent="#6366f1">
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
@@ -116,7 +140,7 @@ function MarketplacesTab({config:c,save}){
         <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
         <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
       </div>
-      <p style={{color:"#5a5a7a",fontSize:12,margin:"4px 0"}}>La quantità fallback viene usata solo se il fornitore non ha una colonna stock configurata.</p>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0"}}>La quantità fallback viene usata solo se il fornitore non ha una colonna stock configurata.</p>
       <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
     </Card>}
   </div>
@@ -129,7 +153,7 @@ function BlacklistTab({config:c,save}){
   const clr=()=>save({...c,blacklist:[]});
   return<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <h3 style={{margin:0,color:"#e0e0f0",fontSize:17}}>Blacklist EAN <span style={{color:"#5a5a7a",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
       {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
     </div>
     <Card>
@@ -138,8 +162,8 @@ function BlacklistTab({config:c,save}){
       <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
     </Card>
     {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
-      {c.blacklist.map(ean=><span key={ean} style={{background:"#2a1a1a",border:"1px solid #5a2a2a",color:"#f87171",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
-        {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+      {c.blacklist.map(ean=><span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
+        {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"var(--bl-text)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
       </span>)}
     </div></Card>}
   </div>
@@ -205,9 +229,9 @@ function ConvertTab({config:c}){
       <label style={S.label}>Sorgente quantità</label>
       <div style={{display:"flex",gap:12,marginTop:6}}>
         {[{v:"catalog",l:"📦 Quantità dal catalogo",d:"Usa la colonna stock del fornitore (fallback: quantità marketplace)"},{v:"fixed",l:"🔒 Quantità fissa marketplace",d:"Usa sempre la quantità configurata nel marketplace"}].map(o=>
-          <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null)}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid #2a2a4a",background:qtyMode===o.v?"#1e1e3e":"#0f0f1e",cursor:"pointer",transition:"all .15s"}}>
-            <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"#a5b4fc":"#7a7a9a"}}>{o.l}</div>
-            <div style={{fontSize:11,color:"#5a5a7a",marginTop:4}}>{o.d}</div>
+          <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null)}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:qtyMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
+            <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
+            <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
           </div>)}
       </div>
       {qtyMode==="catalog"&&!c.suppliers.some(s=>s.stockCol)&&<p style={{color:"#f59e0b",fontSize:12,margin:"8px 0 0"}}>⚠️ Nessun fornitore ha una colonna stock configurata — verrà usata la quantità del marketplace come fallback.</p>}
@@ -216,13 +240,13 @@ function ConvertTab({config:c}){
       <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
       {c.suppliers.map(sup=>{const u=ups[sup.name];return<Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8}}>
-          <strong style={{color:"#e0e0f0",fontSize:14}}>{sup.name}</strong>
-          <span style={S.badge("#065f46")}>+{sup.markupPct}% + {sup.flatFee}€</span>
-          {sup.stockCol&&<span style={S.badge("#1e3a5f")}>Stock: {sup.stockCol}</span>}
+          <strong style={{color:"var(--text)",fontSize:14}}>{sup.name}</strong>
+          <span style={S.badge("var(--badge-ok)")}>+{sup.markupPct}% + {sup.flatFee}€</span>
+          {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
         </div>{u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}</div>
         <div style={{display:"flex",gap:6}}>
           {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
-          <label style={{padding:"8px 16px",borderRadius:8,background:u?"#2a2a4a":"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+          <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"#6366f1",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
           </label>
         </div>
@@ -239,40 +263,52 @@ function ConvertTab({config:c}){
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
         {[["Prodotti nel file",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>
-          <div key={l} style={{background:"#0f0f1e",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-            <div style={{fontSize:22,fontWeight:700,color:"#e0e0f0"}}>{v.toLocaleString()}</div>
-            <div style={{fontSize:11,color:"#7a7a9a",marginTop:2}}>{l}</div>
+          <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{v.toLocaleString()}</div>
+            <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
           </div>)}
       </div>
       <label style={{...S.label,marginBottom:8}}>Prodotti per fornitore (vincenti)</label>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {Object.entries(res.supplierCounts).map(([n,ct])=><div key={n} style={{background:"#0f0f1e",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-          <strong style={{color:"#e0e0f0",fontSize:13}}>{n}</strong><span style={S.badge("#6366f1")}>{ct.toLocaleString()}</span>
+        {Object.entries(res.supplierCounts).map(([n,ct])=><div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+          <strong style={{color:"var(--text)",fontSize:13}}>{n}</strong><span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
         </div>)}
       </div>
     </Card>}
   </div>
 }
 
+function ThemeToggle({theme,toggle}){
+  return<button onClick={toggle} title={theme==="dark"?"Passa a light mode":"Passa a dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
+    {theme==="dark"?"☀️":"🌙"}
+  </button>
+}
+
 function App(){
   const[c,sC]=useState(DEFAULT);
   const[tab,sTab]=useState("convert");
   const[ok,sOk]=useState(false);
+  const[theme,sTheme]=useState(()=>localStorage.getItem("amz-theme")||"dark");
+  useEffect(()=>{document.body.setAttribute("data-theme",theme)},[theme]);
   useEffect(()=>{sC(load());sOk(true)},[]);
   const save=cfg=>{sC(cfg);persist(cfg)};
-  if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#5a5a7a"}}>Caricamento...</div>;
+  const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t)};
+  if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>Caricamento...</div>;
   const tabs=[{id:"convert",label:"⚡ Converti"},{id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},{id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},{id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length}];
   return<div>
-    <div className="app-header" style={{background:"linear-gradient(135deg,#1a1a3e 0%,#0f0f1e 100%)",borderBottom:"1px solid #2a2a4a",padding:"20px 32px"}}>
-      <div style={{maxWidth:1300,margin:"0 auto"}}>
-        <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"#5a5a7a",fontWeight:400}}>v3</span></h1>
-        <p style={{margin:"4px 0 0",color:"#5a5a7a",fontSize:13}}>Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo</p>
+    <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v3</span></h1>
+          <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo</p>
+        </div>
+        <ThemeToggle theme={theme} toggle={toggleTheme}/>
       </div>
     </div>
-    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid #2a2a4a",padding:"0 32px",overflowX:"auto"}}>
+    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
       <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
-        {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"#a5b4fc":"#5a5a7a",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
-          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"#2a2a4a",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
+        {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
+          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
         </button>)}
       </div>
     </div>
