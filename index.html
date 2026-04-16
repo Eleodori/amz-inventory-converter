@@ -12,6 +12,10 @@
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0f0f1e;color:#e0e0f0;font-family:'DM Sans',sans-serif;min-height:100vh}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#1a1a2e}::-webkit-scrollbar-thumb{background:#3a3a5a;border-radius:3px}
+@media(min-width:1024px){.app-content{max-width:960px!important}}
+@media(min-width:1280px){.app-content{max-width:1100px!important}}
+@media(min-width:1536px){.app-content{max-width:1300px!important}}
+@media(max-width:600px){.app-header{padding:14px 16px!important}.app-tabs{padding:0 12px!important}.app-content{padding:16px!important}}
 </style>
 </head>
 <body>
@@ -71,7 +75,7 @@ function SuppliersTab({config:c,save}){
       </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
     {ed!==null&&<Card accent="#6366f1">
       <h4 style={{color:"#a5b4fc",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
         <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
         <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
         <Inp label="Colonna SKU" value={f.skuCol} onChange={e=>sF({...f,skuCol:e.target.value})} placeholder="es. Article"/>
@@ -107,7 +111,7 @@ function MarketplacesTab({config:c,save}){
         <span style={S.badge("#334155")}>Qty fallback: {m.quantity}</span><span style={S.badge("#334155")}>Lead: {m.leadtime}gg</span>
       </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
     {ed!==null&&<Card accent="#6366f1">
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 14px"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
         <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
         <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
         <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
@@ -247,16 +251,20 @@ function App(){
   if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#5a5a7a"}}>Caricamento...</div>;
   const tabs=[{id:"convert",label:"⚡ Converti"},{id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},{id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},{id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length}];
   return<div>
-    <div style={{background:"linear-gradient(135deg,#1a1a3e 0%,#0f0f1e 100%)",borderBottom:"1px solid #2a2a4a",padding:"18px 24px"}}>
-      <h1 style={{margin:0,fontSize:20,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"#5a5a7a",fontWeight:400}}>v3</span></h1>
-      <p style={{margin:"3px 0 0",color:"#5a5a7a",fontSize:12}}>Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo</p>
+    <div className="app-header" style={{background:"linear-gradient(135deg,#1a1a3e 0%,#0f0f1e 100%)",borderBottom:"1px solid #2a2a4a",padding:"20px 32px"}}>
+      <div style={{maxWidth:1300,margin:"0 auto"}}>
+        <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"#5a5a7a",fontWeight:400}}>v3</span></h1>
+        <p style={{margin:"4px 0 0",color:"#5a5a7a",fontSize:13}}>Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo</p>
+      </div>
     </div>
-    <div style={{display:"flex",gap:0,borderBottom:"1px solid #2a2a4a",padding:"0 24px",overflowX:"auto"}}>
-      {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"11px 18px",background:"none",border:"none",color:tab===t.id?"#a5b4fc":"#5a5a7a",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:13,transition:"all .15s",whiteSpace:"nowrap"}}>
-        {t.label}{t.n!==undefined&&<span style={{marginLeft:5,background:"#2a2a4a",padding:"1px 7px",borderRadius:10,fontSize:10}}>{t.n}</span>}
-      </button>)}
+    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid #2a2a4a",padding:"0 32px",overflowX:"auto"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
+        {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"#a5b4fc":"#5a5a7a",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
+          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"#2a2a4a",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
+        </button>)}
+      </div>
     </div>
-    <div style={{padding:24,maxWidth:820,margin:"0 auto"}}>
+    <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
       {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
       {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
       {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}
