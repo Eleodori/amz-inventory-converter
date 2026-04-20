@@ -65,7 +65,7 @@ async function fetchAllCSVsFromFTP(supplierNames, suppliers = []) {
       password: Netlify.env.get("FTP_PASS"),
       port:     parseInt(Netlify.env.get("FTP_PORT") || "21"),
       secure:   true,
-      secureOptions: { rejectUnauthorized: false }, // cert intestato a sgvps.net
+      secureOptions: { rejectUnauthorized: false },
     });
     const rootList = await client.list();
     const domainDir = rootList.find(f => f.type === ftp.FileType.Directory && f.name.includes("."));
