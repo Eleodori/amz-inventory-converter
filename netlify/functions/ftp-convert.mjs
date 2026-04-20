@@ -71,7 +71,8 @@ async function fetchAllCSVsFromFTP(supplierNames, suppliers = []) {
       user:     Netlify.env.get("FTP_USER"),
       password: Netlify.env.get("FTP_PASS"),
       port:     parseInt(Netlify.env.get("FTP_PORT") || "21"),
-      secure:   true, // FTPS con TLS (come FileZilla)
+      secure:   true,
+      secureOptions: { rejectUnauthorized: false }, // cert intestato a sgvps.net, non al dominio FTP
     });
 
     // Lista le cartelle sotto /fornitori
