@@ -13,26 +13,32 @@
 body{font-family:'DM Sans',sans-serif;min-height:100vh;transition:background .2s,color .2s}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg-card)}::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:3px}
 body[data-theme="dark"]{
-  --bg:#0f0f1e;--bg-card:#1a1a2e;--bg-input:#0f0f1e;--bg-stat:#0f0f1e;
-  --bg-header-start:#1a1a3e;--bg-header-end:#0f0f1e;
-  --border:#2a2a4a;--border-input:#3a3a5a;
-  --text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
-  --tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
-  --ghost-border:#3a3a5a;--ghost-text:#8888cc;
-  --badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;
-  --bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
-  --accent-form:#a5b4fc;
+--bg:#0f0f1e;--bg-card:#1a1a2e;--bg-input:#0f0f1e;--bg-stat:#0f0f1e;
+--bg-header-start:#1a1a3e;--bg-header-end:#0f0f1e;
+--border:#2a2a4a;--border-input:#3a3a5a;
+--text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
+--tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
+--ghost-border:#3a3a5a;--ghost-text:#8888cc;
+--badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;
+--bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
+--accent-form:#a5b4fc;
+--tier-bg:#1a1a3e;--tier-border:#2a2a5a;
+--info-bg:#1a2a1a;--info-border:#2a4a2a;--info-text:#86efac;
+--chart-bar:#6366f1;--chart-bar2:#10b981;--chart-grid:#2a2a4a;
 }
 body[data-theme="light"]{
-  --bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
-  --bg-header-start:#e8e8f4;--bg-header-end:#f4f4f8;
-  --border:#dcdce6;--border-input:#c8c8d6;
-  --text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
-  --tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
-  --ghost-border:#c8c8d6;--ghost-text:#4f46e5;
-  --badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;
-  --bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
-  --accent-form:#4f46e5;
+--bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
+--bg-header-start:#e8e8f4;--bg-header-end:#f4f4f8;
+--border:#dcdce6;--border-input:#c8c8d6;
+--text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
+--tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
+--ghost-border:#c8c8d6;--ghost-text:#4f46e5;
+--badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;
+--bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
+--accent-form:#4f46e5;
+--tier-bg:#f0f0fa;--tier-border:#c8c8e8;
+--info-bg:#f0faf0;--info-border:#c8e8c8;--info-text:#166534;
+--chart-bar:#4f46e5;--chart-bar2:#10b981;--chart-grid:#dcdce6;
 }
 body{background:var(--bg);color:var(--text)}
 @media(min-width:1024px){.app-content{max-width:960px!important}}
@@ -45,19 +51,44 @@ body{background:var(--bg);color:var(--text)}
 <script>document.body.setAttribute("data-theme",localStorage.getItem("amz-theme")||"dark")</script>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useCallback}=React;
-const STORE_KEY="amz-conv-v3";
+const {useState,useEffect,useCallback,useRef}=React;
+const STORE_KEY="amz-conv-v4";
 const DEFAULT={suppliers:[],marketplaces:[],blacklist:[]};
 const EU_MP=[
-  {code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
-  {code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
-  {code:"NL",name:"Amazon.nl",cur:"EUR"},{code:"BE",name:"Amazon.com.be",cur:"EUR"},
-  {code:"PL",name:"Amazon.pl",cur:"PLN"},{code:"SE",name:"Amazon.se",cur:"SEK"},
-  {code:"UK",name:"Amazon.co.uk",cur:"GBP"}
+{code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
+{code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
+{code:"NL",name:"Amazon.nl",cur:"EUR"},{code:"BE",name:"Amazon.com.be",cur:"EUR"},
+{code:"PL",name:"Amazon.pl",cur:"PLN"},{code:"SE",name:"Amazon.se",cur:"SEK"},
+{code:"UK",name:"Amazon.co.uk",cur:"GBP"}
 ];
 
-function load(){try{return JSON.parse(localStorage.getItem(STORE_KEY))||DEFAULT}catch{return DEFAULT}}
-function persist(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
+const DEFAULT_TIERS=[
+  {upTo:50,markupPct:18,flatFee:7},
+  {upTo:100,markupPct:13,flatFee:10},
+  {upTo:160,markupPct:12,flatFee:18},
+  {upTo:null,markupPct:10,flatFee:30}
+];
+
+function applyTiers(rp,tiers){
+  if(!tiers||tiers.length===0)return rp;
+  const tier=tiers.find(t=>t.upTo===null||rp<=t.upTo);
+  if(!tier)return rp;
+  return rp*(1+tier.markupPct/100)+tier.flatFee;
+}
+
+function migrate(raw){
+  if(!raw)return DEFAULT;
+  const suppliers=(raw.suppliers||[]).map(s=>{
+    if(s.tiers)return s;
+    return{...s,tiers:[{upTo:null,markupPct:s.markupPct??10,flatFee:s.flatFee??10}]};
+  });
+  return{...DEFAULT,...raw,suppliers};
+}
+
+function loadLocal(){try{return migrate(JSON.parse(localStorage.getItem(STORE_KEY))||null)}catch{return DEFAULT}}
+function persistLocal(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
+async function loadRemote(){try{const r=await fetch("/api/config");if(!r.ok)return null;return await r.json();}catch{return null;}}
+async function persistRemote(c){try{await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});}catch(e){console.warn("Config remote save failed:",e);}}
 function parseCSV(t,d){const ls=t.split(/\r?\n/).filter(l=>l.trim());if(ls.length<2)return{h:[],r:[]};const h=ls[0].split(d).map(x=>x.trim());const r=ls.slice(1).map(l=>{const c=l.split(d);const o={};h.forEach((k,i)=>o[k]=(c[i]||"").trim());return o});return{h,r}}
 function fCol(hs,n){return hs.find(h=>h.toLowerCase()===n.toLowerCase())}
 
@@ -67,6 +98,7 @@ const S={
   input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box"},
   badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
 };
+
 function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
 function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
 function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
@@ -77,248 +109,1031 @@ function Btn({children,onClick,v="pri",style,disabled}){
   return<button onClick={onClick} disabled={disabled} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",...style}}>{children}</button>
 }
 
-function SuppliersTab({config:c,save}){
-  const[ed,sEd]=useState(null);
-  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",markupPct:10,flatFee:10});
-  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",markupPct:10,flatFee:10});sEd("new")};
-  const ed2=(i)=>{sF({...c.suppliers[i],stockCol:c.suppliers[i].stockCol||""});sEd(i)};
-  const sv=()=>{if(!f.name||!f.skuCol||!f.eanCol||!f.priceCol)return;const s={...f,markupPct:parseFloat(f.markupPct)||0,flatFee:parseFloat(f.flatFee)||0};const l=[...c.suppliers];ed==="new"?l.push(s):(l[ed]=s);save({...c,suppliers:l});sEd(null)};
-  const rm=i=>save({...c,suppliers:c.suppliers.filter((_,j)=>j!==i)});
-  return<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+// ─── Mini bar chart ──────────────────────────────────────────────────────────
+function MiniBar({data,color,height=60}){
+  if(!data||data.length===0)return null;
+  const max=Math.max(...data.map(d=>d.v),1);
+  return(
+    <div style={{display:"flex",alignItems:"flex-end",gap:3,height,padding:"4px 0"}}>
+      {data.map((d,i)=>(
+        <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+          <div title={`${d.label}: ${d.v.toLocaleString()}`} style={{width:"100%",height:`${(d.v/max)*100}%`,minHeight:2,background:color||"var(--chart-bar)",borderRadius:"3px 3px 0 0",transition:"height .3s"}}/>
+        </div>
+      ))}
     </div>
-    {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
-    {c.suppliers.map((s,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
-      <strong style={{color:"var(--text)",fontSize:15}}>{s.name}</strong>
-      <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
-        <span style={S.badge("var(--badge-info)")}>SKU: {s.skuCol}</span><span style={S.badge("var(--badge-info)")}>EAN: {s.eanCol}</span>
-        <span style={S.badge("var(--badge-info)")}>Prezzo: {s.priceCol}</span>
-        {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
-        <span style={S.badge("var(--badge-ok)")}>+{s.markupPct}% + {s.flatFee}€</span>
-      </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
-    {ed!==null&&<Card accent="#6366f1">
-      <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
-        <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
-        <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
-        <Inp label="Colonna SKU" value={f.skuCol} onChange={e=>sF({...f,skuCol:e.target.value})} placeholder="es. Article"/>
-        <Inp label="Colonna EAN" value={f.eanCol} onChange={e=>sF({...f,eanCol:e.target.value})} placeholder="es. EAN"/>
-        <Inp label="Colonna Prezzo" value={f.priceCol} onChange={e=>sF({...f,priceCol:e.target.value})} placeholder="es. Price"/>
-        <Inp label="Colonna Stock (quantità)" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
-        <Inp label="Ricarico %" type="number" value={f.markupPct} onChange={e=>sF({...f,markupPct:e.target.value})}/>
-        <Inp label="Costo fisso aggiuntivo (€)" type="number" value={f.flatFee} onChange={e=>sF({...f,flatFee:e.target.value})}/>
-      </div>
-      <p style={{color:"var(--text-muted)",fontSize:12,margin:"6px 0"}}>Formula: (prezzo × {(1+(parseFloat(f.markupPct)||0)/100).toFixed(2)}) + {parseFloat(f.flatFee)||0}€</p>
-      <p style={{color:"var(--text-muted)",fontSize:12,margin:"0 0 6px"}}>Stock: {f.stockCol?"la quantità verrà presa dalla colonna "+f.stockCol+" del fornitore vincente":"quantità fissa dal marketplace (se non imposti una colonna stock)"}</p>
-      <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
-    </Card>}
-  </div>
+  );
 }
 
+// ─── Storico Tab ─────────────────────────────────────────────────────────────
+function HistoryTab(){
+  const[records,setRecords]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[error,setError]=useState(null);
+  const[expanded,setExpanded]=useState(null);
+
+  const fetchHistory=async()=>{
+    setLoading(true);setError(null);
+    try{
+      const r=await fetch("/api/history");
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const data=await r.json();
+      setRecords(data);
+    }catch(e){setError(e.message);}
+    finally{setLoading(false);}
+  };
+
+  useEffect(()=>{fetchHistory();},[]);
+
+  const deleteRecord=async(id)=>{
+    if(!confirm("Eliminare questo record?"))return;
+    try{
+      await fetch(`/api/history?id=${id}`,{method:"DELETE"});
+      setRecords(r=>r.filter(x=>x.id!==id));
+    }catch(e){alert("Errore: "+e.message);}
+  };
+
+  const fmt=iso=>{
+    const d=new Date(iso);
+    return d.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"})+" "+d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+  };
+
+  const fmtDelta=(curr,prev,field)=>{
+    if(!prev)return null;
+    const d=curr[field]-prev[field];
+    if(d===0)return null;
+    const color=d>0?"#10b981":"#ef4444";
+    return<span style={{color,fontSize:11,marginLeft:6}}>{d>0?"+":""}{d.toLocaleString()}</span>;
+  };
+
+  // Dati per grafico trend ultimi 30 giorni
+  const chartData=records.slice(0,30).reverse().map(r=>({
+    label:new Date(r.created_at).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}),
+    v:r.total_products
+  }));
+
+  if(loading)return<Card><p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento storico...</p></Card>;
+  if(error)return<Card accent="#ef4444"><p style={{color:"#ef4444"}}>❌ Errore nel caricamento: {error}</p><Btn v="ghost" onClick={fetchHistory} style={{marginTop:8}}>Riprova</Btn></Card>;
+  if(records.length===0)return<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna conversione salvata. Genera il tuo primo file dal tab ⚡ Converti.</p></Card>;
+
+  return(
+    <div>
+      {/* Trend grafico */}
+      {chartData.length>1&&(
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <h4 style={{margin:0,fontSize:14,color:"var(--text)"}}>Prodotti nel file — ultime {chartData.length} conversioni</h4>
+            <span style={{fontSize:11,color:"var(--text-muted)"}}>max: {Math.max(...chartData.map(d=>d.v)).toLocaleString()}</span>
+          </div>
+          <MiniBar data={chartData} color="var(--chart-bar)" height={80}/>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+            <span style={{fontSize:10,color:"var(--text-muted)"}}>{chartData[0]?.label}</span>
+            <span style={{fontSize:10,color:"var(--text-muted)"}}>{chartData[chartData.length-1]?.label}</span>
+          </div>
+        </Card>
+      )}
+
+      {/* KPI riepilogo */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:14}}>
+        {[
+          ["Conversioni totali", records.length],
+          ["Media prodotti", Math.round(records.reduce((s,r)=>s+r.total_products,0)/records.length).toLocaleString()],
+          ["Max prodotti", Math.max(...records.map(r=>r.total_products)).toLocaleString()],
+          ["Prezzo medio", records[0]?.avg_price_total ? `${records[0].avg_price_total.toFixed(2)}€` : "—"],
+        ].map(([l,v])=>(
+          <div key={l} style={{background:"var(--bg-stat)",borderRadius:10,padding:"12px 16px",textAlign:"center",border:"1px solid var(--border)"}}>
+            <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{v}</div>
+            <div style={{fontSize:11,color:"var(--text-label)",marginTop:3}}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Lista record */}
+      <h3 style={{fontSize:15,marginBottom:10,color:"var(--text)"}}>Storico conversioni</h3>
+      {records.map((r,i)=>{
+        const prev=records[i+1];
+        const isExp=expanded===r.id;
+        return(
+          <Card key={r.id} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",cursor:"pointer"}} onClick={()=>setExpanded(isExp?null:r.id)}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,fontSize:15,color:"var(--text)"}}>{r.total_products.toLocaleString()} prodotti</span>
+                  {fmtDelta(r,prev,"total_products")}
+                  <span style={S.badge("var(--badge-info)")}>{r.marketplace}</span>
+                  {r.avg_price_total&&<span style={S.badge("var(--badge-neutral)")}>media {r.avg_price_total.toFixed(2)}€</span>}
+                </div>
+                <div style={{fontSize:12,color:"var(--text-muted)",marginTop:4}}>{fmt(r.created_at)}</div>
+                {r.by_supplier&&(
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
+                    {Object.entries(r.by_supplier).map(([n,ct])=>(
+                      <span key={n} style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{n}: {ct.toLocaleString()}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:10}}>
+                <span style={{fontSize:18,color:"var(--text-muted)",userSelect:"none"}}>{isExp?"▲":"▼"}</span>
+                <Btn v="danger" onClick={e=>{e.stopPropagation();deleteRecord(r.id);}} style={{fontSize:11,padding:"4px 8px"}}>✕</Btn>
+              </div>
+            </div>
+
+            {/* Dettaglio espanso */}
+            {isExp&&(
+              <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid var(--border)"}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:14}}>
+                  {[
+                    ["Lette",r.total_read],
+                    ["Scartate",r.total_skipped],
+                    ["Duplicati risolti",r.duplicates_resolved],
+                    ["Blacklist",r.blacklisted],
+                  ].map(([l,v])=>(
+                    <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+                      <div style={{fontSize:16,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
+                      <div style={{fontSize:10,color:"var(--text-label)",marginTop:2}}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Per fascia */}
+                {r.by_tier&&Object.keys(r.by_tier).length>0&&(
+                  <div>
+                    <label style={S.label}>Prodotti per fascia di prezzo</label>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                      {Object.entries(r.by_tier).map(([tier,ct])=>(
+                        <div key={tier} style={{background:"var(--tier-bg)",border:"1px solid var(--tier-border)",borderRadius:8,padding:"8px 12px",textAlign:"center",minWidth:90}}>
+                          <div style={{fontSize:15,fontWeight:700,color:"var(--text)"}}>{ct.toLocaleString()}</div>
+                          <div style={{fontSize:10,color:"var(--text-label)",marginTop:2}}>{tier}</div>
+                          {r.avg_price_by_tier?.[tier]&&(
+                            <div style={{fontSize:10,color:"var(--text-muted)"}}>~{r.avg_price_by_tier[tier].toFixed(0)}€ medio</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── TiersEditor ─────────────────────────────────────────────────────────────
+function TiersEditor({tiers,onChange}){
+  const updateTier=(i,field,val)=>{const next=tiers.map((t,j)=>j===i?{...t,[field]:val}:t);onChange(next);};
+  const addTier=()=>{const last=tiers[tiers.length-1];const prev=tiers[tiers.length-2];const newUpTo=prev?(prev.upTo||0)+50:100;onChange([...tiers.slice(0,-1),{upTo:newUpTo,markupPct:last.markupPct,flatFee:last.flatFee},last]);};
+  const removeTier=(i)=>{if(tiers.length<=1)return;onChange(tiers.filter((_,j)=>j!==i));};
+  const previewNet=(tier,ex)=>{const sell=applyTiers(ex,[{...tier,upTo:null}]);return(sell-sell*0.08-ex).toFixed(2);};
+  const midPrice=(tier,i)=>{if(i===0)return Math.min(tier.upTo||50,40);const prev=tiers[i-1];const lo=prev.upTo||0;const hi=tier.upTo||lo+100;return Math.round((lo+hi)/2);};
+  return(
+    <div style={{marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <label style={S.label}>Fasce di rincaro (prezzo fornitore)</label>
+        <Btn v="ghost" onClick={addTier} style={{fontSize:11,padding:"4px 10px"}}>+ Fascia</Btn>
+      </div>
+      <div style={{background:"var(--info-bg)",border:"1px solid var(--info-border)",borderRadius:8,padding:"10px 14px",marginBottom:10,fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+        <strong>Come funzionano le fasce:</strong> prezzo_fornitore × (1 + ricarico%) + quota_fissa<br/>
+        La prima fascia il cui limite ≥ prezzo fornitore viene applicata. L'ultima (senza limite) vale per tutti i prezzi superiori.<br/>
+        Il <strong>netto stimato</strong> è già al netto della commissione Amazon 8%.
+      </div>
+      {tiers.map((tier,i)=>{
+        const ex=midPrice(tier,i);const net=previewNet(tier,ex);const sellEx=applyTiers(ex,[{...tier,upTo:null}]).toFixed(2);const isLast=i===tiers.length-1;
+        return(
+          <div key={i} style={{background:"var(--tier-bg)",border:"1px solid var(--tier-border)",borderRadius:10,padding:"12px 14px",marginBottom:8}}>
+            <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+              <div style={{minWidth:120}}>
+                <label style={S.label}>{isLast?"Oltre (∞)":"Fino a (€)"}</label>
+                {isLast?<div style={{...S.input,color:"var(--text-muted)",cursor:"not-allowed",background:"var(--bg)"}}>∞ oltre</div>
+                :<input type="number" value={tier.upTo??""} onChange={e=>updateTier(i,"upTo",e.target.value===""?null:parseFloat(e.target.value))} style={S.input} placeholder="es. 100"/>}
+              </div>
+              <div style={{minWidth:110}}><label style={S.label}>Ricarico %</label><input type="number" value={tier.markupPct} onChange={e=>updateTier(i,"markupPct",parseFloat(e.target.value)||0)} style={S.input}/></div>
+              <div style={{minWidth:110}}><label style={S.label}>Quota fissa (€)</label><input type="number" value={tier.flatFee} onChange={e=>updateTier(i,"flatFee",parseFloat(e.target.value)||0)} style={S.input}/></div>
+              <div style={{flex:1,minWidth:160,background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px",fontSize:12,lineHeight:1.7}}>
+                <div style={{color:"var(--text-muted)"}}>Es. a <strong style={{color:"var(--text)"}}>{ex}€</strong>:</div>
+                <div>Vendo a <strong style={{color:"var(--accent-form)"}}>{sellEx}€</strong></div>
+                <div>Netto: <strong style={{color:parseFloat(net)>0?"#10b981":"#ef4444"}}>{net}€</strong></div>
+              </div>
+              {tiers.length>1&&<Btn v="danger" onClick={()=>removeTier(i)} style={{fontSize:11,padding:"5px 10px",alignSelf:"flex-end"}}>✕</Btn>}
+            </div>
+          </div>
+        );
+      })}
+      <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>
+        {tiers.map((t,i)=>{const lbl=t.upTo===null?`oltre`:` ≤${t.upTo}€`;return<span key={i} style={{marginRight:10}}>{lbl}: +{t.markupPct}%+{t.flatFee}€</span>;})}
+      </div>
+    </div>
+  );
+}
+
+// ─── SuppliersTab ────────────────────────────────────────────────────────────
+function SuppliersTab({config:c,save}){
+  const[ed,sEd]=useState(null);
+  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS});
+  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS.map(t=>({...t}))});sEd("new");};
+  const ed2=i=>{const s=c.suppliers[i];sF({...s,stockCol:s.stockCol||"",ftpFolder:s.ftpFolder||"",tiers:s.tiers?s.tiers.map(t=>({...t})):DEFAULT_TIERS.map(t=>({...t}))});sEd(i);};
+  const sv=()=>{
+    if(!f.name||!f.skuCol||!f.eanCol||!f.priceCol)return;
+    const s={...f,tiers:f.tiers.map(t=>({...t,markupPct:parseFloat(t.markupPct)||0,flatFee:parseFloat(t.flatFee)||0,upTo:t.upTo===null?null:parseFloat(t.upTo)||null}))};
+    if(s.tiers.length>0)s.tiers[s.tiers.length-1].upTo=null;
+    const l=[...c.suppliers];ed==="new"?l.push(s):(l[ed]=s);save({...c,suppliers:l});sEd(null);
+  };
+  const rm=i=>save({...c,suppliers:c.suppliers.filter((_,j)=>j!==i)});
+  const tiersBadge=tiers=>tiers.map((t,i)=>{const lbl=t.upTo===null?`oltre`:` ≤${t.upTo}€`;return`${lbl}: +${t.markupPct}%+${t.flatFee}€`;}).join(" | ");
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+      </div>
+      {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
+      {c.suppliers.map((s,i)=>(
+        <Card key={i}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div style={{flex:1}}>
+              <strong style={{color:"var(--text)",fontSize:15}}>{s.name}</strong>
+              <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
+                <span style={S.badge("var(--badge-info)")}>SKU: {s.skuCol}</span>
+                <span style={S.badge("var(--badge-info)")}>EAN: {s.eanCol}</span>
+                <span style={S.badge("var(--badge-info)")}>Prezzo: {s.priceCol}</span>
+                {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
+                {s.ftpFolder&&<span style={S.badge("var(--badge-neutral)")}>FTP: {s.ftpFolder}</span>}
+              </div>
+              <div style={{marginTop:6,fontSize:11,color:"var(--text-muted)"}}>{s.tiers?tiersBadge(s.tiers):`+${s.markupPct}%+${s.flatFee}€`}</div>
+            </div>
+            <div style={{display:"flex",gap:6,marginLeft:10}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div>
+          </div>
+        </Card>
+      ))}
+      {ed!==null&&(
+        <Card accent="#6366f1">
+          <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
+            <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
+            <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
+            <Inp label="Colonna SKU" value={f.skuCol} onChange={e=>sF({...f,skuCol:e.target.value})} placeholder="es. Article"/>
+            <Inp label="Colonna EAN" value={f.eanCol} onChange={e=>sF({...f,eanCol:e.target.value})} placeholder="es. EAN"/>
+            <Inp label="Colonna Prezzo" value={f.priceCol} onChange={e=>sF({...f,priceCol:e.target.value})} placeholder="es. Price"/>
+            <Inp label="Colonna Stock" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
+            <Inp label="Cartella FTP (se diversa dal nome)" value={f.ftpFolder} onChange={e=>sF({...f,ftpFolder:e.target.value})} placeholder={`es. DLD (lascia vuoto se uguale a "${f.name||"nome fornitore"}")`}/>
+          </div>
+          <TiersEditor tiers={f.tiers} onChange={tiers=>sF({...f,tiers})}/>
+          <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ─── MarketplacesTab ─────────────────────────────────────────────────────────
 function MarketplacesTab({config:c,save}){
   const[ed,sEd]=useState(null);
   const[f,sF]=useState({code:"IT",quantity:8,leadtime:4});
-  const nw=()=>{sF({code:"IT",quantity:8,leadtime:4});sEd("new")};
-  const ed2=i=>{sF({...c.marketplaces[i]});sEd(i)};
-  const sv=()=>{const m={...f,quantity:parseInt(f.quantity)||8,leadtime:parseInt(f.leadtime)||4};const l=[...c.marketplaces];ed==="new"?l.push(m):(l[ed]=m);save({...c,marketplaces:l});sEd(null)};
+  const nw=()=>{sF({code:"IT",quantity:8,leadtime:4});sEd("new");};
+  const ed2=i=>{sF({...c.marketplaces[i]});sEd(i);};
+  const sv=()=>{const m={...f,quantity:parseInt(f.quantity)||8,leadtime:parseInt(f.leadtime)||4};const l=[...c.marketplaces];ed==="new"?l.push(m):(l[ed]=m);save({...c,marketplaces:l});sEd(null);};
   const rm=i=>save({...c,marketplaces:c.marketplaces.filter((_,j)=>j!==i)});
   const info=code=>EU_MP.find(m=>m.code===code)||{name:code};
-  return<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
-    </div>
-    {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
-    {c.marketplaces.map((m,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
-      <strong style={{color:"var(--text)",fontSize:15}}>{info(m.code).name}</strong>
-      <div style={{marginTop:6,display:"flex",gap:6}}>
-        <span style={S.badge("var(--badge-neutral)")}>Qty fallback: {m.quantity}</span><span style={S.badge("var(--badge-neutral)")}>Lead: {m.leadtime}gg</span>
-      </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
-    {ed!==null&&<Card accent="#6366f1">
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
-        <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
-        <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
-        <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
       </div>
-      <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0"}}>La quantità fallback viene usata solo se il fornitore non ha una colonna stock configurata.</p>
-      <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
-    </Card>}
-  </div>
+      {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
+      {c.marketplaces.map((m,i)=>(
+        <Card key={i}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <strong style={{color:"var(--text)",fontSize:15}}>{info(m.code).name}</strong>
+              <div style={{marginTop:6,display:"flex",gap:6}}>
+                <span style={S.badge("var(--badge-neutral)")}>Qty: {m.quantity}</span>
+                <span style={S.badge("var(--badge-neutral)")}>Lead: {m.leadtime}gg</span>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div>
+          </div>
+        </Card>
+      ))}
+      {ed!==null&&(
+        <Card accent="#6366f1">
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
+            <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
+            <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
+            <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+        </Card>
+      )}
+    </div>
+  );
 }
 
+// ─── BlacklistTab ────────────────────────────────────────────────────────────
 function BlacklistTab({config:c,save}){
   const[inp,sInp]=useState("");
-  const add=()=>{const ne=inp.split(/[\n,;\s]+/).map(e=>e.trim()).filter(e=>e.length>=8&&!c.blacklist.includes(e));if(!ne.length)return;save({...c,blacklist:[...c.blacklist,...ne]});sInp("")};
+  const add=()=>{const ne=inp.split(/[\n,;\s]+/).map(e=>e.trim()).filter(e=>e.length>=8&&!c.blacklist.includes(e));if(!ne.length)return;save({...c,blacklist:[...c.blacklist,...ne]});sInp("");};
   const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)});
   const clr=()=>save({...c,blacklist:[]});
-  return<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
-      {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
+        {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
+      </div>
+      <Card>
+        <label style={S.label}>Aggiungi EAN (uno per riga o separati da virgola)</label>
+        <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620"} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
+        <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
+      </Card>
+      {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
+        {c.blacklist.map(ean=>(
+          <span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
+            {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"var(--bl-text)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+          </span>
+        ))}
+      </div></Card>}
     </div>
-    <Card>
-      <label style={S.label}>Aggiungi EAN (uno per riga o separati da virgola)</label>
-      <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620"} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
-      <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
-    </Card>
-    {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
-      {c.blacklist.map(ean=><span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
-        {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"var(--bl-text)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
-      </span>)}
-    </div></Card>}
-  </div>
+  );
+}
+
+// ─── ConvertTab ───────────────────────────────────────────────────────────────
+// Feature: 1) Progress indicator  2) Preview tabella  3) Priorità fornitore
+
+// Logica di risoluzione duplicati EAN
+// mode="price"    → vince il prezzo più basso (default)
+// mode="priority" → vince il fornitore con priorità più alta (ordine nella lista config)
+//                   a parità di priorità vince il prezzo più basso
+function resolveDuplicate(existing, candidate, mode, supplierPriority){
+  if(mode==="priority"){
+    const pa=supplierPriority[existing.supplier]??999;
+    const pb=supplierPriority[candidate.supplier]??999;
+    if(pb<pa)return candidate;   // priorità più alta (numero più basso) vince
+    if(pb===pa&&candidate.price<existing.price)return candidate; // parità → prezzo
+    return existing;
+  }
+  // default: prezzo più basso
+  return candidate.price<existing.price?candidate:existing;
 }
 
 function ConvertTab({config:c}){
   const[ups,sUps]=useState({});
   const[mpC,sMpC]=useState(c.marketplaces[0]?.code||"");
   const[qtyMode,sQtyMode]=useState("catalog");
+  const[dupMode,sDupMode]=useState("price"); // "price" | "priority"
+  const[progress,setProgress]=useState(null); // null | {phase,pct,msg}
+  const[previewRows,setPreviewRows]=useState(20);
+  const[showPreview,setShowPreview]=useState(true);
   const[res,sRes]=useState(null);
+  const[saving,setSaving]=useState(false);
 
   const hFile=useCallback((sn,file)=>{if(!file)return;sRes(null);const r=new FileReader();r.onload=e=>{sUps(p=>({...p,[sn]:{fn:file.name,d:e.target.result}}))};r.readAsText(file,"utf-8")},[]);
-  const rmUp=n=>{sUps(p=>{const x={...p};delete x[n];return x});sRes(null)};
+  const rmUp=n=>{sUps(p=>{const x={...p};delete x[n];return x});sRes(null);};
 
-  const convert=()=>{
+  // Mappa nome fornitore → indice priorità (0=massima)
+  const supplierPriority=Object.fromEntries(c.suppliers.map((s,i)=>[s.name,i]));
+
+  const convert=useCallback(()=>{
     const mp=c.marketplaces.find(m=>m.code===mpC);if(!mp)return;
-    const bl=new Set(c.blacklist);const em={};
-    let tR=0,tS=0,dup=0,blk=0;const errs=[];
+    sRes(null);
 
-    for(const[sn,up]of Object.entries(ups)){
-      const sup=c.suppliers.find(s=>s.name===sn);if(!sup)continue;
-      const{h,r}=parseCSV(up.d,sup.delimiter);
-      const skC=fCol(h,sup.skuCol),enC=fCol(h,sup.eanCol),prC=fCol(h,sup.priceCol);
-      const stC=sup.stockCol?fCol(h,sup.stockCol):null;
-      if(!skC||!enC||!prC){const ms=[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean);errs.push(sn+": colonne non trovate: "+ms.join(", "));continue}
-      if(sup.stockCol&&!stC){errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata");continue}
+    // Usiamo setTimeout per far respirare il browser tra le fasi
+    setTimeout(()=>{
+      setProgress({phase:1,pct:5,msg:"Lettura file fornitori..."});
+      const bl=new Set(c.blacklist);
+      const em={};
+      let tR=0,tS=0,dup=0,blk=0;
+      const errs=[];
+      const tierCounts={};const tierPriceSum={};
+      const allEntries=Object.entries(ups);
+      const total=allEntries.length;
 
-      for(const row of r){
-        tR++;
-        const ean=(row[enC]||"").trim(),sku=(row[skC]||"").trim();
-        const rp=parseFloat((row[prC]||"0").replace(",","."));
-        if(!ean||ean.length<8||!sku||isNaN(rp)||rp<=0){tS++;continue}
-        if(bl.has(ean)){blk++;continue}
-        const fp=rp*(1+sup.markupPct/100)+sup.flatFee;
-        const stock=stC?parseInt(row[stC])||0:null;
-        if(em[ean]){dup++;if(fp<em[ean].price)em[ean]={sku,ean,price:fp,supplier:sn,stock}}
-        else em[ean]={sku,ean,price:fp,supplier:sn,stock}
-      }
-    }
-    if(errs.length){sRes({error:errs.join("\n")});return}
+      const processSupplier=(idx)=>{
+        if(idx>=total){
+          // Fase 2: costruzione file
+          setProgress({phase:2,pct:80,msg:"Costruzione file di output..."});
+          setTimeout(()=>{
+            if(errs.length){sRes({error:errs.join("\n")});setProgress(null);return;}
+            const hd="sku\tproduct-id\tproduct-id-type\tprice\titem-condition\tquantity\tadd-delete\tleadtime-to-ship";
+            const ls=[hd];const sc={};
+            const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
+            let priceSum=0;
+            const previewData=[];
+            for(const it of sorted){
+              let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
+              const qty=qtyMode==="fixed"?String(mp.quantity):(it.stock!==null?String(it.stock):String(mp.quantity));
+              ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
+              sc[it.supplier]=(sc[it.supplier]||0)+1;
+              tierCounts[it.tierKey]=(tierCounts[it.tierKey]||0)+1;
+              tierPriceSum[it.tierKey]=(tierPriceSum[it.tierKey]||0)+it.rp;
+              priceSum+=it.rp;
+              if(previewData.length<50)previewData.push({sku:it.sku,ean:it.ean,costPrice:it.rp,salePrice:it.price,supplier:it.supplier,qty,tierKey:it.tierKey});
+            }
+            const ct=ls.join("\r\n")+"\r\n";
+            const avg_price_by_tier={};
+            Object.keys(tierCounts).forEach(k=>{avg_price_by_tier[k]=tierPriceSum[k]/tierCounts[k];});
+            setProgress({phase:3,pct:100,msg:"✓ Completato!"});
+            setTimeout(()=>{
+              setProgress(null);
+              sRes({
+                content:ct,total:sorted.length,totalRead:tR,totalSkipped:tS,
+                duplicatesResolved:dup,blacklisted:blk,supplierCounts:sc,previewData,
+                statsPayload:{marketplace:mpC,total_products:sorted.length,total_read:tR,
+                  total_skipped:tS,duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,
+                  by_tier:tierCounts,avg_price_by_tier,avg_price_total:sorted.length>0?priceSum/sorted.length:0}
+              });
+            },400);
+          },50);
+          return;
+        }
 
-    const hd="sku\tproduct-id\tproduct-id-type\tprice\titem-condition\tquantity\tadd-delete\tleadtime-to-ship";
-    const ls=[hd];const sc={};
-    const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
-    for(const it of sorted){
-      let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
-      const qty=qtyMode==="fixed"?String(mp.quantity):(it.stock!==null?String(it.stock):String(mp.quantity));
-      ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
-      sc[it.supplier]=(sc[it.supplier]||0)+1;
-    }
-    const ct=ls.join("\r\n")+"\r\n";
-    sRes({content:ct,total:sorted.length,totalRead:tR,totalSkipped:tS,duplicatesResolved:dup,blacklisted:blk,supplierCounts:sc});
+        const pct=5+Math.round((idx/total)*70);
+        const[sn,up]=allEntries[idx];
+        setProgress({phase:1,pct,msg:`Elaborazione ${sn} (${idx+1}/${total})...`});
+
+        setTimeout(()=>{
+          const sup=c.suppliers.find(s=>s.name===sn);if(!sup){processSupplier(idx+1);return;}
+          const{h,r}=parseCSV(up.d,sup.delimiter);
+          const skC=fCol(h,sup.skuCol),enC=fCol(h,sup.eanCol),prC=fCol(h,sup.priceCol);
+          const stC=sup.stockCol?fCol(h,sup.stockCol):null;
+          if(!skC||!enC||!prC){errs.push(sn+": colonne non trovate: "+[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean).join(", "));processSupplier(idx+1);return;}
+          if(sup.stockCol&&!stC){errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata");processSupplier(idx+1);return;}
+          for(const row of r){
+            tR++;
+            const ean=(row[enC]||"").trim(),sku=(row[skC]||"").trim();
+            const rp=parseFloat((row[prC]||"0").replace(",","."));
+            if(!ean||ean.length<8||!sku||isNaN(rp)||rp<=0){tS++;continue;}
+            if(bl.has(ean)){blk++;continue;}
+            const tiers=sup.tiers||[];
+            const tierIdx=tiers.findIndex(t=>t.upTo===null||rp<=t.upTo);
+            const tierKey=tiers[tierIdx]?.upTo===null?`>${tiers[tierIdx-1]?.upTo??0}€`:`≤${tiers[tierIdx]?.upTo}€`;
+            const fp=applyTiers(rp,tiers);
+            const stock=stC?parseInt(row[stC])||0:null;
+            const candidate={sku,ean,price:fp,supplier:sn,stock,tierKey,rp};
+            if(em[ean]){dup++;em[ean]=resolveDuplicate(em[ean],candidate,dupMode,supplierPriority);}
+            else em[ean]=candidate;
+          }
+          processSupplier(idx+1);
+        },10);
+      };
+      processSupplier(0);
+    },30);
+  },[ups,mpC,qtyMode,dupMode,c]);
+
+  const dl=()=>{
+    if(!res?.content)return;
+    const b=new Blob([res.content],{type:"text/plain;charset=utf-8"});
+    const u=URL.createObjectURL(b);const a=document.createElement("a");
+    a.href=u;a.download="InventoryLoader_merged_"+mpC+"_"+new Date().toISOString().slice(0,10)+".txt";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);
   };
 
-  const dl=()=>{if(!res?.content)return;const b=new Blob([res.content],{type:"text/plain;charset=utf-8"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="InventoryLoader_merged_"+mpC+"_"+new Date().toISOString().slice(0,10)+".txt";document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u)};
+  const saveToHistory=async()=>{
+    if(!res?.statsPayload)return;setSaving(true);
+    try{const r=await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(res.statsPayload)});if(!r.ok)throw new Error(`HTTP ${r.status}`);alert("✓ Salvato nello storico!");}
+    catch(e){alert("Errore: "+e.message);}finally{setSaving(false);}
+  };
 
   if(!c.suppliers.length||!c.marketplaces.length)return<Card><p style={{color:"#f59e0b",textAlign:"center",margin:0}}>⚠️ Configura almeno un fornitore e un marketplace.</p></Card>;
   const uc=Object.keys(ups).length;
 
-  return<div>
-    <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null)}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
-    <Card>
-      <label style={S.label}>Sorgente quantità</label>
-      <div style={{display:"flex",gap:12,marginTop:6}}>
-        {[{v:"catalog",l:"📦 Quantità dal catalogo",d:"Usa la colonna stock del fornitore (fallback: quantità marketplace)"},{v:"fixed",l:"🔒 Quantità fissa marketplace",d:"Usa sempre la quantità configurata nel marketplace"}].map(o=>
-          <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null)}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:qtyMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
-            <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
-            <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
-          </div>)}
-      </div>
-      {qtyMode==="catalog"&&!c.suppliers.some(s=>s.stockCol)&&<p style={{color:"#f59e0b",fontSize:12,margin:"8px 0 0"}}>⚠️ Nessun fornitore ha una colonna stock configurata — verrà usata la quantità del marketplace come fallback.</p>}
-    </Card>
-    <div style={{marginBottom:14}}>
-      <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
-      {c.suppliers.map(sup=>{const u=ups[sup.name];return<Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8}}>
-          <strong style={{color:"var(--text)",fontSize:14}}>{sup.name}</strong>
-          <span style={S.badge("var(--badge-ok)")}>+{sup.markupPct}% + {sup.flatFee}€</span>
-          {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
-        </div>{u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}</div>
-        <div style={{display:"flex",gap:6}}>
-          {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
-          <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"#6366f1",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
-            {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
-          </label>
+  return(
+    <div>
+      {/* Marketplace */}
+      <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null);}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
+
+      {/* Quantità */}
+      <Card>
+        <label style={S.label}>Sorgente quantità</label>
+        <div style={{display:"flex",gap:12,marginTop:6}}>
+          {[{v:"catalog",l:"📦 Dal catalogo",d:"Usa la colonna stock del fornitore"},{v:"fixed",l:"🔒 Fissa",d:"Usa la quantità del marketplace"}].map(o=>(
+            <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null);}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:qtyMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
+              <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
+              <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
+            </div>
+          ))}
         </div>
-      </Card>})}
+      </Card>
+
+      {/* ── FEATURE 3: Modalità duplicati ── */}
+      <Card>
+        <label style={S.label}>Quando lo stesso EAN è presente in più fornitori</label>
+        <div style={{display:"flex",gap:12,marginTop:6}}>
+          {[
+            {v:"price",l:"💰 Prezzo più basso vince",d:"Sceglie sempre l'offerta con prezzo finale minore"},
+            {v:"priority",l:"⭐ Priorità fornitore",d:`Vince il fornitore con priorità più alta. Ordine attuale: ${c.suppliers.map(s=>s.name).join(" → ") || "—"}`}
+          ].map(o=>(
+            <div key={o.v} onClick={()=>{sDupMode(o.v);sRes(null);}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:dupMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:dupMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
+              <div style={{fontWeight:600,fontSize:14,color:dupMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
+              <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
+            </div>
+          ))}
+        </div>
+        {dupMode==="priority"&&<p style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>💡 La priorità segue l'ordine dei fornitori nella tab 🏭 Fornitori. Trascina o riordina lì per cambiare la precedenza.</p>}
+      </Card>
+
+      {/* Carica file */}
+      <div style={{marginBottom:14}}>
+        <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
+        {c.suppliers.map((sup,si)=>{const u=ups[sup.name];return(
+          <Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                {dupMode==="priority"&&<span style={{background:"var(--badge-neutral)",color:"var(--text)",borderRadius:6,padding:"1px 7px",fontSize:11,fontWeight:700}}>#{si+1}</span>}
+                <strong style={{color:"var(--text)",fontSize:14}}>{sup.name}</strong>
+                <span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{sup.tiers?`${sup.tiers.length} fasce`:"flat"}</span>
+                {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
+              </div>
+              {u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
+              <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"#6366f1",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+                {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
+              </label>
+            </div>
+          </Card>
+        );})}
+      </div>
+
+      {/* Bottone genera */}
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <Btn v="ok" onClick={convert} disabled={uc===0||!!progress} style={{padding:"12px 40px",fontSize:15}}>
+          {progress?"⏳ Elaborazione...":"⚡ Genera file unificato"}
+          {!progress&&` (${uc} ${uc===1?"fornitore":"fornitori"})`}
+        </Btn>
+      </div>
+
+      {/* ── FEATURE 1: Progress bar ── */}
+      {progress&&(
+        <Card accent="#6366f1">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <span style={{fontSize:13,color:"var(--text)",fontWeight:600}}>{progress.msg}</span>
+            <span style={{fontSize:12,color:"var(--accent-form)",fontWeight:700}}>{progress.pct}%</span>
+          </div>
+          <div style={{background:"var(--bg-input)",borderRadius:6,height:8,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${progress.pct}%`,background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:6,transition:"width .3s ease"}}/>
+          </div>
+          <p style={{fontSize:11,color:"var(--text-muted)",marginTop:6}}>Fase {progress.phase}/3 — il browser rimane responsivo durante l'elaborazione</p>
+        </Card>
+      )}
+
+      {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
+
+      {res?.content&&(
+        <div>
+          {/* Riepilogo KPI */}
+          <Card accent="#10b981">
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
+              <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <Btn v="ok" onClick={dl} style={{fontSize:14}}>↓ Scarica .txt</Btn>
+                <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>
+                  {saving?"Salvataggio...":"📊 Salva nello storico"}
+                </Btn>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
+              {[["Prodotti",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>(
+                <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{v.toLocaleString()}</div>
+                  <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <label style={{...S.label,marginBottom:8}}>Per fornitore vincente</label>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {Object.entries(res.supplierCounts).map(([n,ct])=>(
+                <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+                  <strong style={{color:"var(--text)",fontSize:13}}>{n}</strong>
+                  <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* ── FEATURE 2: Anteprima tabella ── */}
+          {res.previewData&&res.previewData.length>0&&(
+            <Card>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <h4 style={{margin:0,fontSize:14,color:"var(--text)"}}>
+                  👁 Anteprima prime {Math.min(previewRows,res.previewData.length)} righe
+                  <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12,marginLeft:8}}>su {res.total.toLocaleString()} totali</span>
+                </h4>
+                <Btn v="ghost" onClick={()=>setShowPreview(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>
+                  {showPreview?"Nascondi":"Mostra"}
+                </Btn>
+              </div>
+              {showPreview&&(
+                <div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr style={{borderBottom:"2px solid var(--border)"}}>
+                          {["EAN","SKU","Fascia","Costo (€)","Vendita (€)","Netto est.","Fornitore","Qty"].map(h=>(
+                            <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {res.previewData.slice(0,previewRows).map((row,i)=>{
+                          const net=(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2);
+                          const netColor=parseFloat(net)>0?"#10b981":"#ef4444";
+                          return(
+                            <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)"}}>
+                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
+                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
+                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
+                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.costPrice.toFixed(2)}</td>
+                              <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{row.salePrice.toFixed(2)}</td>
+                              <td style={{padding:"5px 10px",fontWeight:600,color:netColor}}>{net}</td>
+                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
+                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {res.previewData.length>previewRows&&(
+                    <div style={{textAlign:"center",marginTop:10}}>
+                      <Btn v="ghost" onClick={()=>setPreviewRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20 righe</Btn>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+        </div>
+      )}
     </div>
-    <div style={{textAlign:"center",marginBottom:14}}>
-      <Btn v="ok" onClick={convert} disabled={uc===0} style={{padding:"12px 40px",fontSize:15}}>⚡ Genera file unificato ({uc} {uc===1?"fornitore":"fornitori"})</Btn>
-    </div>
-    {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
-    {res?.content&&<Card accent="#10b981">
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-        <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
-        <Btn v="ok" onClick={dl} style={{fontSize:14}}>↓ Scarica .txt</Btn>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
-        {[["Prodotti nel file",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>
-          <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-            <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{v.toLocaleString()}</div>
-            <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
-          </div>)}
-      </div>
-      <label style={{...S.label,marginBottom:8}}>Prodotti per fornitore (vincenti)</label>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {Object.entries(res.supplierCounts).map(([n,ct])=><div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-          <strong style={{color:"var(--text)",fontSize:13}}>{n}</strong><span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
-        </div>)}
-      </div>
-    </Card>}
-  </div>
+  );
 }
 
+// ─── Alert Bell ──────────────────────────────────────────────────────────────
+function AlertBell({onClick,count}){
+  return(
+    <button onClick={onClick} title="Notifiche" style={{position:"relative",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
+      🔔
+      {count>0&&<span style={{position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",borderRadius:"50%",fontSize:9,fontWeight:700,width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center"}}>{count>9?"9+":count}</span>}
+    </button>
+  );
+}
+
+// ─── Auto Tab (FTP fetch + file pronto) ──────────────────────────────────────
+function AutoTab(){
+  const[status,setStatus]=useState(null); // null | loading | ready | error
+  const[result,setResult]=useState(null);
+  const[generating,setGenerating]=useState(false);
+  const[marketplace,setMarketplace]=useState("IT");
+  const[dupMode,setDupMode]=useState("price");
+  const[previewRows,setPreviewRows]=useState(20);
+  const[showPreview,setShowPreview]=useState(true);
+  const[saving,setSaving]=useState(false);
+
+  // Carica l'ultimo risultato già pronto
+  const loadLatest=async()=>{
+    setStatus("loading");
+    try{
+      const r=await fetch("/api/ftp-convert");
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const data=await r.json();
+      if(data){setResult(data);setStatus("ready");}
+      else{setStatus(null);}
+    }catch(e){setStatus("error");console.error(e);}
+  };
+
+  useEffect(()=>{loadLatest();},[]);
+
+  const generate=async()=>{
+    setGenerating(true);setResult(null);
+    try{
+      const r=await fetch("/api/ftp-convert",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({marketplace,dupMode})
+      });
+      const data=await r.json();
+      if(!r.ok)throw new Error(data.error||`HTTP ${r.status}`);
+      await loadLatest();
+    }catch(e){
+      setStatus("error");
+      setResult({error:e.message});
+    }finally{setGenerating(false);}
+  };
+
+  const dl=()=>{
+    if(!result?.fileContent)return;
+    const b=new Blob([result.fileContent],{type:"text/plain;charset=utf-8"});
+    const u=URL.createObjectURL(b);const a=document.createElement("a");
+    a.href=u;a.download=result.filename||"inventory.txt";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);
+  };
+
+  const saveToHistory=async()=>{
+    if(!result?.stats)return;setSaving(true);
+    try{
+      await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(result.stats)});
+      alert("✓ Salvato nello storico!");
+    }catch(e){alert("Errore: "+e.message);}
+    finally{setSaving(false);}
+  };
+
+  const fmtDate=iso=>{
+    if(!iso)return"—";
+    return new Date(iso).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  };
+
+  return(
+    <div>
+      {/* Info scheduled */}
+      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:24}}>🤖</span>
+          <div>
+            <div style={{fontWeight:700,color:"var(--info-text)",marginBottom:4}}>Generazione automatica attiva</div>
+            <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+              Ogni mattina alle <strong>9:15</strong> (Lun–Sab) il sistema scarica automaticamente i CSV dall'FTP, 
+              esegue la conversione e tiene il file pronto qui. Voi aprite il sito, cliccate Scarica, caricate su Amazon. Fine.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Controlli manuali */}
+      <Card>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          <div>
+            <label style={S.label}>Marketplace</label>
+            <select value={marketplace} onChange={e=>setMarketplace(e.target.value)} style={S.input}>
+              {[{v:"IT",l:"Amazon.it"},{v:"DE",l:"Amazon.de"},{v:"FR",l:"Amazon.fr"},{v:"ES",l:"Amazon.es"}].map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={S.label}>Risoluzione duplicati EAN</label>
+            <select value={dupMode} onChange={e=>setDupMode(e.target.value)} style={S.input}>
+              <option value="price">💰 Prezzo più basso</option>
+              <option value="priority">⭐ Priorità fornitore</option>
+            </select>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <Btn v="pri" onClick={generate} disabled={generating} style={{fontSize:14,padding:"10px 24px"}}>
+            {generating?"⏳ Scaricando dall'FTP...":"📥 Genera adesso da FTP"}
+          </Btn>
+          <Btn v="ghost" onClick={loadLatest} style={{fontSize:13}}>↻ Ricarica</Btn>
+          <span style={{fontSize:11,color:"var(--text-muted)"}}>oppure aspetta la generazione automatica delle 9:15</span>
+        </div>
+      </Card>
+
+      {/* Errore */}
+      {result?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0}}>❌ {result.error}</p></Card>}
+
+      {/* File pronto */}
+      {status==="ready"&&result?.stats&&(
+        <div>
+          <Card accent="#10b981">
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
+              <div>
+                <h4 style={{color:"#10b981",margin:"0 0 4px"}}>✓ File pronto</h4>
+                <div style={{fontSize:12,color:"var(--text-muted)"}}>Generato il {fmtDate(result.stats.generated_at)} • {result.filename}</div>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <Btn v="ok" onClick={dl} style={{fontSize:14,padding:"10px 24px"}}>↓ Scarica .txt</Btn>
+                <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>
+                  {saving?"Salvataggio...":"📊 Salva nello storico"}
+                </Btn>
+              </div>
+            </div>
+
+            {/* KPI */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:14}}>
+              {[
+                ["Prodotti",result.stats.total_products],
+                ["Righe lette",result.stats.total_read],
+                ["Scartate",result.stats.total_skipped],
+                ["Duplicati",result.stats.duplicates_resolved],
+                ["Blacklist",result.stats.blacklisted],
+              ].map(([l,v])=>(
+                <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
+                  <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Per fornitore */}
+            {result.stats.by_supplier&&(
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {Object.entries(result.stats.by_supplier).map(([n,ct])=>(
+                  <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+                    <strong style={{fontSize:13}}>{n}</strong>
+                    <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Errori CSV se presenti */}
+            {result.stats.errors?.length>0&&(
+              <div style={{marginTop:12,padding:"8px 12px",background:"var(--bl-bg)",borderRadius:8,border:"1px solid var(--bl-border)"}}>
+                {result.stats.errors.map((e,i)=><div key={i} style={{fontSize:12,color:"var(--bl-text)"}}>{e}</div>)}
+              </div>
+            )}
+          </Card>
+
+          {/* Anteprima */}
+          {result.stats.previewData?.length>0&&(
+            <Card>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <h4 style={{margin:0,fontSize:14}}>👁 Anteprima <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12}}>prime {Math.min(previewRows,result.stats.previewData.length)} di {result.stats.total_products.toLocaleString()}</span></h4>
+                <Btn v="ghost" onClick={()=>setShowPreview(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>{showPreview?"Nascondi":"Mostra"}</Btn>
+              </div>
+              {showPreview&&(
+                <div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr style={{borderBottom:"2px solid var(--border)"}}>
+                          {["EAN","SKU","Fascia","Costo €","Vendita €","Netto est.","Fornitore","Qty"].map(h=>(
+                            <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.stats.previewData.slice(0,previewRows).map((row,i)=>{
+                          const net=(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2);
+                          return(
+                            <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)"}}>
+                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
+                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
+                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
+                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.costPrice.toFixed(2)}</td>
+                              <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{row.salePrice.toFixed(2)}</td>
+                              <td style={{padding:"5px 10px",fontWeight:600,color:parseFloat(net)>0?"#10b981":"#ef4444"}}>{net}</td>
+                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
+                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {result.stats.previewData.length>previewRows&&(
+                    <div style={{textAlign:"center",marginTop:10}}>
+                      <Btn v="ghost" onClick={()=>setPreviewRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20</Btn>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+        </div>
+      )}
+
+      {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento...</p></Card>}
+    </div>
+  );
+}
+
+// ─── Alerts Panel ─────────────────────────────────────────────────────────────
+function AlertsPanel({onClose}){
+  const[alerts,setAlerts]=useState([]);
+  const[loading,setLoading]=useState(true);
+
+  const fetchAlerts=async()=>{
+    setLoading(true);
+    try{const r=await fetch("/api/alerts");const d=await r.json();setAlerts(d);}
+    catch{}finally{setLoading(false);}
+  };
+
+  useEffect(()=>{fetchAlerts();},[]);
+
+  const action=async(body)=>{
+    await fetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    fetchAlerts();
+  };
+
+  const unread=alerts.filter(a=>!a.read);
+  const read=alerts.filter(a=>a.read);
+
+  const colorMap={error:"#ef4444",warning:"#f59e0b",info:"#6366f1"};
+  const bgMap={error:"var(--bl-bg)",warning:"#2a1a00",info:"var(--tier-bg)"};
+
+  return(
+    <div style={{position:"fixed",top:0,right:0,width:380,height:"100vh",background:"var(--bg-card)",borderLeft:"1px solid var(--border)",zIndex:1000,display:"flex",flexDirection:"column",boxShadow:"-4px 0 20px rgba(0,0,0,0.3)"}}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <h3 style={{margin:0,fontSize:16}}>🔔 Notifiche {unread.length>0&&<span style={{color:"#ef4444",fontSize:13}}>({unread.length} nuove)</span>}</h3>
+        <div style={{display:"flex",gap:8}}>
+          {unread.length>0&&<Btn v="ghost" onClick={()=>action({action:"read-all"})} style={{fontSize:11,padding:"4px 8px"}}>Segna tutte lette</Btn>}
+          {read.length>0&&<Btn v="danger" onClick={()=>action({action:"clear"})} style={{fontSize:11,padding:"4px 8px"}}>Cancella lette</Btn>}
+          <Btn v="ghost" onClick={onClose} style={{fontSize:13,padding:"4px 10px"}}>✕</Btn>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:16}}>
+        {loading&&<p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento...</p>}
+        {!loading&&alerts.length===0&&<p style={{color:"var(--text-muted)",textAlign:"center",marginTop:40}}>Nessuna notifica. Tutto ok! ✓</p>}
+        {alerts.map(a=>(
+          <div key={a.id} style={{background:bgMap[a.type]||"var(--bg-input)",border:`1px solid ${colorMap[a.type]||"var(--border)"}`,borderRadius:10,padding:"12px 14px",marginBottom:10,opacity:a.read?0.55:1}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,color:colorMap[a.type]||"var(--text)",marginBottom:4}}>{a.title}</div>
+                <div style={{fontSize:12,color:"var(--text-muted)",lineHeight:1.5}}>{a.message}</div>
+                <div style={{fontSize:10,color:"var(--text-muted)",marginTop:6}}>{new Date(a.created_at).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
+              </div>
+              {!a.read&&<button onClick={()=>action({action:"read",id:a.id})} style={{background:"none",border:"none",color:"var(--text-muted)",cursor:"pointer",fontSize:16,padding:0,flexShrink:0}}>✓</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 function ThemeToggle({theme,toggle}){
-  return<button onClick={toggle} title={theme==="dark"?"Passa a light mode":"Passa a dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
+  return<button onClick={toggle} title={theme==="dark"?"Light mode":"Dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
     {theme==="dark"?"☀️":"🌙"}
-  </button>
+  </button>;
 }
 
+// ─── App ─────────────────────────────────────────────────────────────────────
 function App(){
   const[c,sC]=useState(DEFAULT);
-  const[tab,sTab]=useState("convert");
+  const[tab,sTab]=useState("auto");
   const[ok,sOk]=useState(false);
+  const[syncStatus,setSyncStatus]=useState("idle");
   const[theme,sTheme]=useState(()=>localStorage.getItem("amz-theme")||"dark");
-  useEffect(()=>{document.body.setAttribute("data-theme",theme)},[theme]);
-  useEffect(()=>{sC(load());sOk(true)},[]);
-  const save=cfg=>{sC(cfg);persist(cfg)};
-  const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t)};
+  const[alertCount,setAlertCount]=useState(0);
+  const[showAlerts,setShowAlerts]=useState(false);
+
+  useEffect(()=>{document.body.setAttribute("data-theme",theme);},[theme]);
+
+  useEffect(()=>{
+    const local=loadLocal();sC(local);sOk(true);setSyncStatus("syncing");
+    loadRemote().then(remote=>{
+      if(remote){const migrated=migrate(remote);sC(migrated);persistLocal(migrated);setSyncStatus("synced");}
+      else setSyncStatus("idle");
+    }).catch(()=>setSyncStatus("error"));
+    // Conta alert non letti
+    fetch("/api/alerts").then(r=>r.json()).then(alerts=>{
+      setAlertCount((alerts||[]).filter(a=>!a.read).length);
+    }).catch(()=>{});
+  },[]);
+
+  const save=cfg=>{
+    sC(cfg);persistLocal(cfg);setSyncStatus("syncing");
+    persistRemote(cfg).then(()=>setSyncStatus("synced")).catch(()=>setSyncStatus("error"));
+  };
+  const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t);};
+
   if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>Caricamento...</div>;
-  const tabs=[{id:"convert",label:"⚡ Converti"},{id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},{id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},{id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length}];
-  return<div>
-    <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
-      <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div>
-          <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v3</span></h1>
-          <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo</p>
+
+  const tabs=[
+    {id:"auto",   label:"🤖 Auto"},
+    {id:"convert",label:"⚡ Manuale"},
+    {id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},
+    {id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},
+    {id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length},
+    {id:"history",label:"📊 Storico"},
+  ];
+
+  return(
+    <div>
+      {showAlerts&&<AlertsPanel onClose={()=>{setShowAlerts(false);fetch("/api/alerts").then(r=>r.json()).then(d=>setAlertCount((d||[]).filter(a=>!a.read).length)).catch(()=>{});}}/>}
+      <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
+        <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v5.0</span></h1>
+            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Auto FTP • Multi-fornitore • Fasce rincaro • Storico • Alert</p>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:11,color:{idle:"var(--text-muted)",syncing:"#f59e0b",synced:"#10b981",error:"#ef4444"}[syncStatus]}}>
+              {syncStatus==="syncing"&&"↑ sync..."}
+              {syncStatus==="synced"&&"✓ sync"}
+              {syncStatus==="error"&&"⚠ offline"}
+            </span>
+            <AlertBell onClick={()=>setShowAlerts(p=>!p)} count={alertCount}/>
+            <ThemeToggle theme={theme} toggle={toggleTheme}/>
+          </div>
         </div>
-        <ThemeToggle theme={theme} toggle={toggleTheme}/>
+      </div>
+      <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
+        <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
+          {tabs.map(t=>(
+            <button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
+              {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
+        {tab==="auto"&&<AutoTab/>}
+        {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
+        {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
+        {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}
+        {tab==="convert"&&<ConvertTab config={c}/>}
+        {tab==="history"&&<HistoryTab/>}
       </div>
     </div>
-    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
-      <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
-        {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
-          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
-        </button>)}
-      </div>
-    </div>
-    <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
-      {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
-      {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
-      {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}
-      {tab==="convert"&&<ConvertTab config={c}/>}
-    </div>
-  </div>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);

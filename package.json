@@ -1,0 +1,10 @@
+{
+  "name": "amz-inventory-converter",
+  "version": "4.3.0",
+  "description": "Amazon Inventory Converter con storico, FTP auto-fetch e alert",
+  "dependencies": {
+    "@netlify/blobs": "^8.0.0",
+    "@netlify/functions": "^3.0.0",
+    "basic-ftp": "^5.0.5"
+  }
+}
