@@ -64,8 +64,11 @@ async function fetchAllCSVsFromFTP(supplierNames, suppliers = []) {
       user:     Netlify.env.get("FTP_USER"),
       password: Netlify.env.get("FTP_PASS"),
       port:     parseInt(Netlify.env.get("FTP_PORT") || "21"),
-      secure:   false,
+      secure:   true, // FTPS con TLS
     });
+    const rootList = await client.list();
+    const domainDir = rootList.find(f => f.type === ftp.FileType.Directory && f.name.includes("."));
+    if (domainDir) await client.cd(domainDir.name);
     await client.cd("fornitori");
     const list = await client.list();
     const ftpDirs = list.filter(f => f.type === ftp.FileType.Directory).map(f => f.name);

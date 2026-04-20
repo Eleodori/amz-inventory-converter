@@ -71,17 +71,22 @@ async function fetchAllCSVsFromFTP(supplierNames, suppliers = []) {
       user:     Netlify.env.get("FTP_USER"),
       password: Netlify.env.get("FTP_PASS"),
       port:     parseInt(Netlify.env.get("FTP_PORT") || "21"),
-      secure:   false,
+      secure:   true, // FTPS con TLS (come FileZilla)
     });
 
     // Lista le cartelle sotto /fornitori
     let ftpDirs = [];
     try {
+      // La root FTP contiene una cartella col nome del dominio
+      // quindi il path reale è michelee14.sg-host.com/fornitori
+      const rootList = await client.list();
+      const domainDir = rootList.find(f => f.type === ftp.FileType.Directory && f.name.includes("."));
+      if (domainDir) await client.cd(domainDir.name);
       await client.cd("fornitori");
       const list = await client.list();
       ftpDirs = list.filter(f => f.type === ftp.FileType.Directory).map(f => f.name);
     } catch (e) {
-      throw new Error(`Cartella /fornitori non trovata sull'FTP: ${e.message}`);
+      throw new Error(`Cartella fornitori non trovata sull'FTP: ${e.message}`);
     }
 
     // Per ogni fornitore configurato, cerca la cartella FTP corrispondente
