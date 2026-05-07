@@ -3,10 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Amazon Inventory Converter</title>
+<title>Global Way - Inventory & Invoicing</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -19,12 +22,9 @@ body[data-theme="dark"]{
 --text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
 --tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
 --ghost-border:#3a3a5a;--ghost-text:#8888cc;
---badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;
+--badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;--badge-warn:#78350f;
 --bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
 --accent-form:#a5b4fc;
---tier-bg:#1a1a3e;--tier-border:#2a2a5a;
---info-bg:#1a2a1a;--info-border:#2a4a2a;--info-text:#86efac;
---chart-bar:#6366f1;--chart-bar2:#10b981;--chart-grid:#2a2a4a;
 }
 body[data-theme="light"]{
 --bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
@@ -33,1107 +33,1253 @@ body[data-theme="light"]{
 --text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
 --tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
 --ghost-border:#c8c8d6;--ghost-text:#4f46e5;
---badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;
+--badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;--badge-warn:#fed7aa;
 --bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
 --accent-form:#4f46e5;
---tier-bg:#f0f0fa;--tier-border:#c8c8e8;
---info-bg:#f0faf0;--info-border:#c8e8c8;--info-text:#166534;
---chart-bar:#4f46e5;--chart-bar2:#10b981;--chart-grid:#dcdce6;
 }
 body{background:var(--bg);color:var(--text)}
 @media(min-width:1024px){.app-content{max-width:960px!important}}
 @media(min-width:1280px){.app-content{max-width:1100px!important}}
 @media(min-width:1536px){.app-content{max-width:1300px!important}}
 @media(max-width:600px){.app-header{padding:14px 16px!important}.app-tabs{padding:0 12px!important}.app-content{padding:16px!important}}
+.modeswitch{display:inline-flex;background:var(--bg-input);border:1px solid var(--border-input);border-radius:10px;padding:3px;gap:2px}
+.modeswitch button{background:none;border:none;padding:7px 14px;border-radius:7px;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted);transition:all .15s;font-family:inherit}
+.modeswitch button.act{background:#6366f1;color:#fff}
 </style>
 </head>
 <body>
 <script>document.body.setAttribute("data-theme",localStorage.getItem("amz-theme")||"dark")</script>
 <div id="root"></div>
+
+<script>
+// pdf.js worker
+if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"}
+</script>
+
 <script type="text/babel">
-const {useState,useEffect,useCallback,useRef}=React;
-const STORE_KEY="amz-conv-v4";
+const {useState,useEffect,useCallback,useMemo}=React;
+
+/* ==========================================================
+   STORAGE KEYS
+   ========================================================== */
+const STORE_KEY="amz-conv-v3";  // inventory converter (esistente)
+const INV_KEY="gw-invoicing-v1"; // sezione fatturazione (nuova)
+
 const DEFAULT={suppliers:[],marketplaces:[],blacklist:[]};
+const DEFAULT_INV={
+  customers:[],
+  markupTiers:[
+    {id:1,min:0,max:50,markupPct:25,flatFee:0},
+    {id:2,min:50,max:100,markupPct:20,flatFee:0},
+    {id:3,min:100,max:999999,markupPct:15,flatFee:0}
+  ],
+  lastInvoiceNumber:0,
+  invoiceYear:new Date().getFullYear(),
+  invoices:[]
+};
+
 const EU_MP=[
-{code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
-{code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
-{code:"NL",name:"Amazon.nl",cur:"EUR"},{code:"BE",name:"Amazon.com.be",cur:"EUR"},
-{code:"PL",name:"Amazon.pl",cur:"PLN"},{code:"SE",name:"Amazon.se",cur:"SEK"},
-{code:"UK",name:"Amazon.co.uk",cur:"GBP"}
+  {code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
+  {code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
+  {code:"NL",name:"Amazon.nl",cur:"EUR"},{code:"BE",name:"Amazon.com.be",cur:"EUR"},
+  {code:"PL",name:"Amazon.pl",cur:"PLN"},{code:"SE",name:"Amazon.se",cur:"SEK"},
+  {code:"UK",name:"Amazon.co.uk",cur:"GBP"}
 ];
 
-const DEFAULT_TIERS=[
-  {upTo:50,markupPct:18,flatFee:7},
-  {upTo:100,markupPct:13,flatFee:10},
-  {upTo:160,markupPct:12,flatFee:18},
-  {upTo:null,markupPct:10,flatFee:30}
-];
+// dati azienda emittente (FISSI)
+const ISSUER={
+  name:"Global Way LT MB",
+  address1:"V. Nageviciaus g. 3",
+  address2:"08237 Vilnius",
+  country:"Lithuania",
+  vat:"LT100019693812",
+  email:"",
+  phone:"",
+  iban:"",
+  bic:""
+};
 
-function applyTiers(rp,tiers){
-  if(!tiers||tiers.length===0)return rp;
-  const tier=tiers.find(t=>t.upTo===null||rp<=t.upTo);
-  if(!tier)return rp;
-  return rp*(1+tier.markupPct/100)+tier.flatFee;
-}
+/* ==========================================================
+   PERSISTENZA
+   ========================================================== */
+function load(){try{return JSON.parse(localStorage.getItem(STORE_KEY))||DEFAULT}catch{return DEFAULT}}
+function persist(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
+function loadInv(){try{const v=JSON.parse(localStorage.getItem(INV_KEY));return v?{...DEFAULT_INV,...v}:DEFAULT_INV}catch{return DEFAULT_INV}}
+function persistInv(c){localStorage.setItem(INV_KEY,JSON.stringify(c))}
 
-function migrate(raw){
-  if(!raw)return DEFAULT;
-  const suppliers=(raw.suppliers||[]).map(s=>{
-    if(s.tiers)return s;
-    return{...s,tiers:[{upTo:null,markupPct:s.markupPct??10,flatFee:s.flatFee??10}]};
-  });
-  return{...DEFAULT,...raw,suppliers};
-}
-
-function loadLocal(){try{return migrate(JSON.parse(localStorage.getItem(STORE_KEY))||null)}catch{return DEFAULT}}
-function persistLocal(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
-async function loadRemote(){try{const r=await fetch("/api/config");if(!r.ok)return null;return await r.json();}catch{return null;}}
-async function persistRemote(c){try{await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});}catch(e){console.warn("Config remote save failed:",e);}}
+/* ==========================================================
+   CSV UTILITIES (sezione inventory)
+   ========================================================== */
 function parseCSV(t,d){const ls=t.split(/\r?\n/).filter(l=>l.trim());if(ls.length<2)return{h:[],r:[]};const h=ls[0].split(d).map(x=>x.trim());const r=ls.slice(1).map(l=>{const c=l.split(d);const o={};h.forEach((k,i)=>o[k]=(c[i]||"").trim());return o});return{h,r}}
 function fCol(hs,n){return hs.find(h=>h.toLowerCase()===n.toLowerCase())}
 
+/* ==========================================================
+   PARSER FATTURE PASSIVE DELDO
+   Estrae righe pneumatico (ignora DPD, ecotasse, voci doganali)
+   raggruppate per numero d'ordine, con dati cliente finale.
+   ========================================================== */
+async function extractTextFromPDF(file){
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  let text="";
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i);
+    const tc=await page.getTextContent();
+    // ricostruisci righe usando coordinata Y
+    const items=tc.items.map(it=>({str:it.str,x:it.transform[4],y:it.transform[5]}));
+    items.sort((a,b)=>b.y-a.y || a.x-b.x);
+    let curY=null,line=[];const lines=[];
+    for(const it of items){
+      if(curY===null||Math.abs(it.y-curY)<3){line.push(it);curY=curY??it.y}
+      else{lines.push(line);line=[it];curY=it.y}
+    }
+    if(line.length)lines.push(line);
+    for(const ln of lines){
+      ln.sort((a,b)=>a.x-b.x);
+      text += ln.map(x=>x.str).join(" ").replace(/\s+/g," ").trim() + "\n";
+    }
+    text += "\n";
+  }
+  return text;
+}
+
+function parseDeldo(text){
+  // metadati fattura passiva (per riferimento)
+  let supplierInvNum=null,supplierInvDate=null;
+  const metaM=text.match(/(\d{8})\s+(\d{2}-\d{2}-\d{4})\s+([A-Z]{2}\d+)/);
+  if(metaM){supplierInvNum=metaM[1];supplierInvDate=metaM[2]}
+
+  // splitta per blocchi "numero d'ordine"
+  const blocks=text.split(/numero d'ordine\s*:/i).slice(1);
+  const orders=[];
+  const skipKeywords=["eilandtoeslag","dpd","spedizione","trasporto","passenger car tyres","ecotassa","smaltimento"];
+
+  for(const block of blocks){
+    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(\d+)\s*-\s*(\d+)/);
+    if(!ord)continue;
+    const order={
+      orderId1:ord[1],orderId2:ord[2],ref1:ord[3],ref2:ord[4],
+      client:{name:"",street:"",city:"",country:"Italy"},
+      items:[]
+    };
+
+    // estrai indirizzo
+    const addrM=block.match(/indirizzo di\s+([\s\S]+)/i);
+    if(addrM){
+      const addrBlock=addrM[1];
+      const lines=[];
+      for(const raw of addrBlock.split("\n")){
+        const s=raw.trim();
+        if(!s)continue;
+        // stop alla prima riga pneumatico/voce
+        if(/^\d{1,3}\s+\d{2,3}\s+\d{2,3}/.test(s))break;
+        if(/^\d+\s+DPD/i.test(s))break;
+        lines.push(s);
+      }
+      const nameParts=[];let capCity="";let street="";
+      // CAP italiano: 5 cifre seguite da spazio + nome città. Deve essere preceduto da
+      // spazio/trattino/inizio (NON da altra cifra) altrimenti matcha pezzi di telefoni.
+      const capRe=/(?:^|[\s\-])(\d{5}\s+\S.*)$/;
+      for(const ln of lines){
+        // riga con nome + CAP città sulla stessa linea (layout 2 colonne)
+        const capInLine=ln.match(capRe);
+        if(capInLine && !/^\d{5}\b/.test(ln)){
+          const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
+          const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
+          const right=capInLine[1].trim();
+          if(left)nameParts.push(left);
+          if(!capCity)capCity=right;
+          continue;
+        }
+        if(ln==="Italy")continue;
+        if(/^\d{5}\s/.test(ln)){if(!capCity)capCity=ln;continue}
+        // telefono "puro" o "puro-": skip
+        if(/^\d{7,}-?$/.test(ln))continue;
+        // riga che è solo "telefono - telefono" o simili
+        if(/^[\d\s\-]+$/.test(ln) && /\d{7,}/.test(ln))continue;
+        if(/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada)/i.test(ln)){
+          if(!street)street=ln;
+          continue;
+        }
+        const cleaned=ln.replace(/\s+Italy\s*$/,"").replace(/^[-\s,]+|[-\s,]+$/g,"");
+        if(cleaned)nameParts.push(cleaned);
+      }
+      capCity=capCity.replace(/\s+Italy\s*$/,"").trim();
+      let fullName=nameParts.join(" ");
+      // rimuovi numeri di telefono (7+ cifre consecutive) ovunque
+      fullName=fullName.replace(/-?\s*\d{7,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
+      order.client={name:fullName,street,city:capCity,country:"Italy"};
+    }
+
+    // estrazione items: dalla parte dopo "Italy" (o dopo l'ultima riga indirizzo)
+    // pulizia righe
+    const cleanLines=[];
+    const afterIt=block.split(/\bItaly\b/);
+    const itemsSection=afterIt.length>1?afterIt.slice(1).join(" Italy "):block;
+    for(const raw of itemsSection.split("\n")){
+      const s=raw.trim();
+      if(!s)continue;
+      if(/^label\s*:/i.test(s))continue;
+      if(/^\d{8,}$/.test(s))continue;
+      if(/Pagina:|www\.deldo\.com/.test(s))continue;
+      if(/condizioni generali/i.test(s))break;
+      cleanLines.push(s);
+    }
+
+    // merge righe spezzate (descrizione su 2 righe)
+    const merged=[];
+    let i=0;
+    while(i<cleanLines.length){
+      let cur=cleanLines[i];
+      const looksItem=/^\d{1,3}\s+\d/.test(cur);
+      const endsPrices=/\d+[.,]\d{2}\s+\d+[.,]\d{2}\s*$/.test(cur);
+      if(looksItem && !endsPrices && i+1<cleanLines.length){
+        const nxt=cleanLines[i+1];
+        if(/\d+[.,]\d{2}\s+\d+[.,]\d{2}\s*$/.test(nxt) && !/^\d{1,3}\s+\d{2,3}/.test(nxt)){
+          cur=cur+" "+nxt;merged.push(cur);i+=2;continue;
+        }else if(!/^\d{1,3}\s+\d{2,3}/.test(nxt) && i+2<cleanLines.length){
+          const nxt2=cleanLines[i+2];
+          if(/\d+[.,]\d{2}\s+\d+[.,]\d{2}\s*$/.test(nxt2)){
+            cur=cur+" "+nxt+" "+nxt2;merged.push(cur);i+=3;continue;
+          }
+        }
+      }
+      merged.push(cur);i++;
+    }
+
+    const itemRe=/^(\d{1,3})\s+(.+?)\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})\s*$/;
+    for(const ln of merged){
+      const m=ln.match(itemRe);
+      if(!m)continue;
+      const qty=parseInt(m[1]);
+      const desc=m[2].trim();
+      const price=parseFloat(m[3].replace(",","."));
+      const total=parseFloat(m[4].replace(",","."));
+      const dl=desc.toLowerCase();
+      if(skipKeywords.some(k=>dl.includes(k)))continue;
+      if(/\b\d{8}\b/.test(desc))continue;  // codice doganale
+      if(!/\d{3}\s*[\/\s]\s*\d{2,3}\b/.test(desc))continue;  // sanity check misura
+      order.items.push({quantity:qty,description:desc,unitPrice:price,total});
+    }
+
+    if(order.items.length>0)orders.push(order);
+  }
+  return {meta:{supplierInvNum,supplierInvDate},orders};
+}
+
+/* ==========================================================
+   CALCOLO RICARICO PER FASCIA
+   Dato un prezzo di acquisto, trova la fascia e applica markup
+   ========================================================== */
+function applyMarkup(price,tiers){
+  const tier=tiers.find(t=>price>=parseFloat(t.min) && price<parseFloat(t.max))
+    ||tiers[tiers.length-1];
+  if(!tier)return price;
+  const m=parseFloat(tier.markupPct)||0;
+  const f=parseFloat(tier.flatFee)||0;
+  return price*(1+m/100)+f;
+}
+
+/* ==========================================================
+   FORMATTERS
+   ========================================================== */
+const fmtEur=v=>new Intl.NumberFormat("it-IT",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v||0);
+const todayIso=()=>new Date().toISOString().slice(0,10);
+function isoToIt(iso){if(!iso)return"";const[y,m,d]=iso.split("-");return`${d}/${m}/${y}`}
+function nextInvoiceNumber(inv){
+  const y=new Date().getFullYear();
+  const num=(inv.invoiceYear===y?inv.lastInvoiceNumber:0)+1;
+  return {year:y,num,formatted:`${y}/${String(num).padStart(4,"0")}`};
+}
+
+/* ==========================================================
+   DESIGN SYSTEM
+   ========================================================== */
 const S={
   card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:14},
   label:{display:"block",fontSize:11,color:"var(--text-label)",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
-  input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box"},
+  input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box",fontFamily:"inherit"},
   badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
 };
 
 function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
 function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
 function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
-function Btn({children,onClick,v="pri",style,disabled}){
+function Btn({children,onClick,v="pri",style,disabled,type}){
   const bg={pri:"#6366f1",ok:"#10b981",danger:"#ef4444",ghost:"transparent"}[v];
   const bd=v==="ghost"?"1px solid var(--ghost-border)":"none";
   const cl=v==="ghost"?"var(--ghost-text)":"#fff";
-  return<button onClick={onClick} disabled={disabled} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",...style}}>{children}</button>
+  return<button onClick={onClick} disabled={disabled} type={type||"button"} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",fontFamily:"inherit",...style}}>{children}</button>
 }
 
-// ─── Mini bar chart ──────────────────────────────────────────────────────────
-function MiniBar({data,color,height=60}){
-  if(!data||data.length===0)return null;
-  const max=Math.max(...data.map(d=>d.v),1);
-  return(
-    <div style={{display:"flex",alignItems:"flex-end",gap:3,height,padding:"4px 0"}}>
-      {data.map((d,i)=>(
-        <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-          <div title={`${d.label}: ${d.v.toLocaleString()}`} style={{width:"100%",height:`${(d.v/max)*100}%`,minHeight:2,background:color||"var(--chart-bar)",borderRadius:"3px 3px 0 0",transition:"height .3s"}}/>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── Storico Tab ─────────────────────────────────────────────────────────────
-function HistoryTab(){
-  const[records,setRecords]=useState([]);
-  const[loading,setLoading]=useState(true);
-  const[error,setError]=useState(null);
-  const[expanded,setExpanded]=useState(null);
-
-  const fetchHistory=async()=>{
-    setLoading(true);setError(null);
-    try{
-      const r=await fetch("/api/history");
-      if(!r.ok)throw new Error(`HTTP ${r.status}`);
-      const data=await r.json();
-      setRecords(data);
-    }catch(e){setError(e.message);}
-    finally{setLoading(false);}
-  };
-
-  useEffect(()=>{fetchHistory();},[]);
-
-  const deleteRecord=async(id)=>{
-    if(!confirm("Eliminare questo record?"))return;
-    try{
-      await fetch(`/api/history?id=${id}`,{method:"DELETE"});
-      setRecords(r=>r.filter(x=>x.id!==id));
-    }catch(e){alert("Errore: "+e.message);}
-  };
-
-  const fmt=iso=>{
-    const d=new Date(iso);
-    return d.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"})+" "+d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-  };
-
-  const fmtDelta=(curr,prev,field)=>{
-    if(!prev)return null;
-    const d=curr[field]-prev[field];
-    if(d===0)return null;
-    const color=d>0?"#10b981":"#ef4444";
-    return<span style={{color,fontSize:11,marginLeft:6}}>{d>0?"+":""}{d.toLocaleString()}</span>;
-  };
-
-  // Dati per grafico trend ultimi 30 giorni
-  const chartData=records.slice(0,30).reverse().map(r=>({
-    label:new Date(r.created_at).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}),
-    v:r.total_products
-  }));
-
-  if(loading)return<Card><p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento storico...</p></Card>;
-  if(error)return<Card accent="#ef4444"><p style={{color:"#ef4444"}}>❌ Errore nel caricamento: {error}</p><Btn v="ghost" onClick={fetchHistory} style={{marginTop:8}}>Riprova</Btn></Card>;
-  if(records.length===0)return<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna conversione salvata. Genera il tuo primo file dal tab ⚡ Converti.</p></Card>;
-
-  return(
-    <div>
-      {/* Trend grafico */}
-      {chartData.length>1&&(
-        <Card>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-            <h4 style={{margin:0,fontSize:14,color:"var(--text)"}}>Prodotti nel file — ultime {chartData.length} conversioni</h4>
-            <span style={{fontSize:11,color:"var(--text-muted)"}}>max: {Math.max(...chartData.map(d=>d.v)).toLocaleString()}</span>
-          </div>
-          <MiniBar data={chartData} color="var(--chart-bar)" height={80}/>
-          <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
-            <span style={{fontSize:10,color:"var(--text-muted)"}}>{chartData[0]?.label}</span>
-            <span style={{fontSize:10,color:"var(--text-muted)"}}>{chartData[chartData.length-1]?.label}</span>
-          </div>
-        </Card>
-      )}
-
-      {/* KPI riepilogo */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:14}}>
-        {[
-          ["Conversioni totali", records.length],
-          ["Media prodotti", Math.round(records.reduce((s,r)=>s+r.total_products,0)/records.length).toLocaleString()],
-          ["Max prodotti", Math.max(...records.map(r=>r.total_products)).toLocaleString()],
-          ["Prezzo medio", records[0]?.avg_price_total ? `${records[0].avg_price_total.toFixed(2)}€` : "—"],
-        ].map(([l,v])=>(
-          <div key={l} style={{background:"var(--bg-stat)",borderRadius:10,padding:"12px 16px",textAlign:"center",border:"1px solid var(--border)"}}>
-            <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{v}</div>
-            <div style={{fontSize:11,color:"var(--text-label)",marginTop:3}}>{l}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Lista record */}
-      <h3 style={{fontSize:15,marginBottom:10,color:"var(--text)"}}>Storico conversioni</h3>
-      {records.map((r,i)=>{
-        const prev=records[i+1];
-        const isExp=expanded===r.id;
-        return(
-          <Card key={r.id} style={{marginBottom:10}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",cursor:"pointer"}} onClick={()=>setExpanded(isExp?null:r.id)}>
-              <div style={{flex:1}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                  <span style={{fontWeight:700,fontSize:15,color:"var(--text)"}}>{r.total_products.toLocaleString()} prodotti</span>
-                  {fmtDelta(r,prev,"total_products")}
-                  <span style={S.badge("var(--badge-info)")}>{r.marketplace}</span>
-                  {r.avg_price_total&&<span style={S.badge("var(--badge-neutral)")}>media {r.avg_price_total.toFixed(2)}€</span>}
-                </div>
-                <div style={{fontSize:12,color:"var(--text-muted)",marginTop:4}}>{fmt(r.created_at)}</div>
-                {r.by_supplier&&(
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
-                    {Object.entries(r.by_supplier).map(([n,ct])=>(
-                      <span key={n} style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{n}: {ct.toLocaleString()}</span>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:10}}>
-                <span style={{fontSize:18,color:"var(--text-muted)",userSelect:"none"}}>{isExp?"▲":"▼"}</span>
-                <Btn v="danger" onClick={e=>{e.stopPropagation();deleteRecord(r.id);}} style={{fontSize:11,padding:"4px 8px"}}>✕</Btn>
-              </div>
-            </div>
-
-            {/* Dettaglio espanso */}
-            {isExp&&(
-              <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid var(--border)"}}>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:14}}>
-                  {[
-                    ["Lette",r.total_read],
-                    ["Scartate",r.total_skipped],
-                    ["Duplicati risolti",r.duplicates_resolved],
-                    ["Blacklist",r.blacklisted],
-                  ].map(([l,v])=>(
-                    <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-                      <div style={{fontSize:16,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
-                      <div style={{fontSize:10,color:"var(--text-label)",marginTop:2}}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Per fascia */}
-                {r.by_tier&&Object.keys(r.by_tier).length>0&&(
-                  <div>
-                    <label style={S.label}>Prodotti per fascia di prezzo</label>
-                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-                      {Object.entries(r.by_tier).map(([tier,ct])=>(
-                        <div key={tier} style={{background:"var(--tier-bg)",border:"1px solid var(--tier-border)",borderRadius:8,padding:"8px 12px",textAlign:"center",minWidth:90}}>
-                          <div style={{fontSize:15,fontWeight:700,color:"var(--text)"}}>{ct.toLocaleString()}</div>
-                          <div style={{fontSize:10,color:"var(--text-label)",marginTop:2}}>{tier}</div>
-                          {r.avg_price_by_tier?.[tier]&&(
-                            <div style={{fontSize:10,color:"var(--text-muted)"}}>~{r.avg_price_by_tier[tier].toFixed(0)}€ medio</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── TiersEditor ─────────────────────────────────────────────────────────────
-function TiersEditor({tiers,onChange}){
-  const updateTier=(i,field,val)=>{const next=tiers.map((t,j)=>j===i?{...t,[field]:val}:t);onChange(next);};
-  const addTier=()=>{const last=tiers[tiers.length-1];const prev=tiers[tiers.length-2];const newUpTo=prev?(prev.upTo||0)+50:100;onChange([...tiers.slice(0,-1),{upTo:newUpTo,markupPct:last.markupPct,flatFee:last.flatFee},last]);};
-  const removeTier=(i)=>{if(tiers.length<=1)return;onChange(tiers.filter((_,j)=>j!==i));};
-  const previewNet=(tier,ex)=>{const sell=applyTiers(ex,[{...tier,upTo:null}]);return(sell-sell*0.08-ex).toFixed(2);};
-  const midPrice=(tier,i)=>{if(i===0)return Math.min(tier.upTo||50,40);const prev=tiers[i-1];const lo=prev.upTo||0;const hi=tier.upTo||lo+100;return Math.round((lo+hi)/2);};
-  return(
-    <div style={{marginBottom:10}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <label style={S.label}>Fasce di rincaro (prezzo fornitore)</label>
-        <Btn v="ghost" onClick={addTier} style={{fontSize:11,padding:"4px 10px"}}>+ Fascia</Btn>
-      </div>
-      <div style={{background:"var(--info-bg)",border:"1px solid var(--info-border)",borderRadius:8,padding:"10px 14px",marginBottom:10,fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
-        <strong>Come funzionano le fasce:</strong> prezzo_fornitore × (1 + ricarico%) + quota_fissa<br/>
-        La prima fascia il cui limite ≥ prezzo fornitore viene applicata. L'ultima (senza limite) vale per tutti i prezzi superiori.<br/>
-        Il <strong>netto stimato</strong> è già al netto della commissione Amazon 8%.
-      </div>
-      {tiers.map((tier,i)=>{
-        const ex=midPrice(tier,i);const net=previewNet(tier,ex);const sellEx=applyTiers(ex,[{...tier,upTo:null}]).toFixed(2);const isLast=i===tiers.length-1;
-        return(
-          <div key={i} style={{background:"var(--tier-bg)",border:"1px solid var(--tier-border)",borderRadius:10,padding:"12px 14px",marginBottom:8}}>
-            <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
-              <div style={{minWidth:120}}>
-                <label style={S.label}>{isLast?"Oltre (∞)":"Fino a (€)"}</label>
-                {isLast?<div style={{...S.input,color:"var(--text-muted)",cursor:"not-allowed",background:"var(--bg)"}}>∞ oltre</div>
-                :<input type="number" value={tier.upTo??""} onChange={e=>updateTier(i,"upTo",e.target.value===""?null:parseFloat(e.target.value))} style={S.input} placeholder="es. 100"/>}
-              </div>
-              <div style={{minWidth:110}}><label style={S.label}>Ricarico %</label><input type="number" value={tier.markupPct} onChange={e=>updateTier(i,"markupPct",parseFloat(e.target.value)||0)} style={S.input}/></div>
-              <div style={{minWidth:110}}><label style={S.label}>Quota fissa (€)</label><input type="number" value={tier.flatFee} onChange={e=>updateTier(i,"flatFee",parseFloat(e.target.value)||0)} style={S.input}/></div>
-              <div style={{flex:1,minWidth:160,background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px",fontSize:12,lineHeight:1.7}}>
-                <div style={{color:"var(--text-muted)"}}>Es. a <strong style={{color:"var(--text)"}}>{ex}€</strong>:</div>
-                <div>Vendo a <strong style={{color:"var(--accent-form)"}}>{sellEx}€</strong></div>
-                <div>Netto: <strong style={{color:parseFloat(net)>0?"#10b981":"#ef4444"}}>{net}€</strong></div>
-              </div>
-              {tiers.length>1&&<Btn v="danger" onClick={()=>removeTier(i)} style={{fontSize:11,padding:"5px 10px",alignSelf:"flex-end"}}>✕</Btn>}
-            </div>
-          </div>
-        );
-      })}
-      <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>
-        {tiers.map((t,i)=>{const lbl=t.upTo===null?`oltre`:` ≤${t.upTo}€`;return<span key={i} style={{marginRight:10}}>{lbl}: +{t.markupPct}%+{t.flatFee}€</span>;})}
-      </div>
-    </div>
-  );
-}
-
-// ─── SuppliersTab ────────────────────────────────────────────────────────────
+/* ==========================================================
+   SEZIONE INVENTORY (codice esistente, invariato)
+   ========================================================== */
 function SuppliersTab({config:c,save}){
   const[ed,sEd]=useState(null);
-  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS});
-  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS.map(t=>({...t}))});sEd("new");};
-  const ed2=i=>{const s=c.suppliers[i];sF({...s,stockCol:s.stockCol||"",ftpFolder:s.ftpFolder||"",tiers:s.tiers?s.tiers.map(t=>({...t})):DEFAULT_TIERS.map(t=>({...t}))});sEd(i);};
-  const sv=()=>{
-    if(!f.name||!f.skuCol||!f.eanCol||!f.priceCol)return;
-    const s={...f,tiers:f.tiers.map(t=>({...t,markupPct:parseFloat(t.markupPct)||0,flatFee:parseFloat(t.flatFee)||0,upTo:t.upTo===null?null:parseFloat(t.upTo)||null}))};
-    if(s.tiers.length>0)s.tiers[s.tiers.length-1].upTo=null;
-    const l=[...c.suppliers];ed==="new"?l.push(s):(l[ed]=s);save({...c,suppliers:l});sEd(null);
-  };
+  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",markupPct:10,flatFee:10});
+  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",markupPct:10,flatFee:10});sEd("new")};
+  const ed2=(i)=>{sF({...c.suppliers[i],stockCol:c.suppliers[i].stockCol||""});sEd(i)};
+  const sv=()=>{if(!f.name||!f.skuCol||!f.eanCol||!f.priceCol)return;const s={...f,markupPct:parseFloat(f.markupPct)||0,flatFee:parseFloat(f.flatFee)||0};const l=[...c.suppliers];ed==="new"?l.push(s):(l[ed]=s);save({...c,suppliers:l});sEd(null)};
   const rm=i=>save({...c,suppliers:c.suppliers.filter((_,j)=>j!==i)});
-  const tiersBadge=tiers=>tiers.map((t,i)=>{const lbl=t.upTo===null?`oltre`:` ≤${t.upTo}€`;return`${lbl}: +${t.markupPct}%+${t.flatFee}€`;}).join(" | ");
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
-      </div>
-      {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
-      {c.suppliers.map((s,i)=>(
-        <Card key={i}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div style={{flex:1}}>
-              <strong style={{color:"var(--text)",fontSize:15}}>{s.name}</strong>
-              <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
-                <span style={S.badge("var(--badge-info)")}>SKU: {s.skuCol}</span>
-                <span style={S.badge("var(--badge-info)")}>EAN: {s.eanCol}</span>
-                <span style={S.badge("var(--badge-info)")}>Prezzo: {s.priceCol}</span>
-                {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
-                {s.ftpFolder&&<span style={S.badge("var(--badge-neutral)")}>FTP: {s.ftpFolder}</span>}
-              </div>
-              <div style={{marginTop:6,fontSize:11,color:"var(--text-muted)"}}>{s.tiers?tiersBadge(s.tiers):`+${s.markupPct}%+${s.flatFee}€`}</div>
-            </div>
-            <div style={{display:"flex",gap:6,marginLeft:10}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div>
-          </div>
-        </Card>
-      ))}
-      {ed!==null&&(
-        <Card accent="#6366f1">
-          <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
-            <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
-            <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
-            <Inp label="Colonna SKU" value={f.skuCol} onChange={e=>sF({...f,skuCol:e.target.value})} placeholder="es. Article"/>
-            <Inp label="Colonna EAN" value={f.eanCol} onChange={e=>sF({...f,eanCol:e.target.value})} placeholder="es. EAN"/>
-            <Inp label="Colonna Prezzo" value={f.priceCol} onChange={e=>sF({...f,priceCol:e.target.value})} placeholder="es. Price"/>
-            <Inp label="Colonna Stock" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
-            <Inp label="Cartella FTP (se diversa dal nome)" value={f.ftpFolder} onChange={e=>sF({...f,ftpFolder:e.target.value})} placeholder={`es. DLD (lascia vuoto se uguale a "${f.name||"nome fornitore"}")`}/>
-          </div>
-          <TiersEditor tiers={f.tiers} onChange={tiers=>sF({...f,tiers})}/>
-          <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
-        </Card>
-      )}
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Fornitori</h3><Btn onClick={nw}>+ Aggiungi</Btn>
     </div>
-  );
+    {c.suppliers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun fornitore configurato.</p></Card>}
+    {c.suppliers.map((s,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
+      <strong style={{color:"var(--text)",fontSize:15}}>{s.name}</strong>
+      <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
+        <span style={S.badge("var(--badge-info)")}>SKU: {s.skuCol}</span><span style={S.badge("var(--badge-info)")}>EAN: {s.eanCol}</span>
+        <span style={S.badge("var(--badge-info)")}>Prezzo: {s.priceCol}</span>
+        {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
+        <span style={S.badge("var(--badge-ok)")}>+{s.markupPct}% + {s.flatFee}€</span>
+      </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
+    {ed!==null&&<Card accent="#6366f1">
+      <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
+        <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
+        <Sel label="Delimitatore" value={f.delimiter} onChange={e=>sF({...f,delimiter:e.target.value})} options={[{v:";",l:"Punto e virgola (;)"},{v:",",l:"Virgola (,)"},{v:"\t",l:"Tab"},{v:"|",l:"Pipe (|)"}]}/>
+        <Inp label="Colonna SKU" value={f.skuCol} onChange={e=>sF({...f,skuCol:e.target.value})} placeholder="es. Article"/>
+        <Inp label="Colonna EAN" value={f.eanCol} onChange={e=>sF({...f,eanCol:e.target.value})} placeholder="es. EAN"/>
+        <Inp label="Colonna Prezzo" value={f.priceCol} onChange={e=>sF({...f,priceCol:e.target.value})} placeholder="es. Price"/>
+        <Inp label="Colonna Stock (quantità)" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
+        <Inp label="Ricarico %" type="number" value={f.markupPct} onChange={e=>sF({...f,markupPct:e.target.value})}/>
+        <Inp label="Costo fisso aggiuntivo (€)" type="number" value={f.flatFee} onChange={e=>sF({...f,flatFee:e.target.value})}/>
+      </div>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"6px 0"}}>Formula: (prezzo × {(1+(parseFloat(f.markupPct)||0)/100).toFixed(2)}) + {parseFloat(f.flatFee)||0}€</p>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"0 0 6px"}}>Stock: {f.stockCol?"la quantità verrà presa dalla colonna "+f.stockCol+" del fornitore vincente":"quantità fissa dal marketplace (se non imposti una colonna stock)"}</p>
+      <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+    </Card>}
+  </div>
 }
 
-// ─── MarketplacesTab ─────────────────────────────────────────────────────────
 function MarketplacesTab({config:c,save}){
   const[ed,sEd]=useState(null);
   const[f,sF]=useState({code:"IT",quantity:8,leadtime:4});
-  const nw=()=>{sF({code:"IT",quantity:8,leadtime:4});sEd("new");};
-  const ed2=i=>{sF({...c.marketplaces[i]});sEd(i);};
-  const sv=()=>{const m={...f,quantity:parseInt(f.quantity)||8,leadtime:parseInt(f.leadtime)||4};const l=[...c.marketplaces];ed==="new"?l.push(m):(l[ed]=m);save({...c,marketplaces:l});sEd(null);};
+  const nw=()=>{sF({code:"IT",quantity:8,leadtime:4});sEd("new")};
+  const ed2=i=>{sF({...c.marketplaces[i]});sEd(i)};
+  const sv=()=>{const m={...f,quantity:parseInt(f.quantity)||8,leadtime:parseInt(f.leadtime)||4};const l=[...c.marketplaces];ed==="new"?l.push(m):(l[ed]=m);save({...c,marketplaces:l});sEd(null)};
   const rm=i=>save({...c,marketplaces:c.marketplaces.filter((_,j)=>j!==i)});
   const info=code=>EU_MP.find(m=>m.code===code)||{name:code};
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
-      </div>
-      {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
-      {c.marketplaces.map((m,i)=>(
-        <Card key={i}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <strong style={{color:"var(--text)",fontSize:15}}>{info(m.code).name}</strong>
-              <div style={{marginTop:6,display:"flex",gap:6}}>
-                <span style={S.badge("var(--badge-neutral)")}>Qty: {m.quantity}</span>
-                <span style={S.badge("var(--badge-neutral)")}>Lead: {m.leadtime}gg</span>
-              </div>
-            </div>
-            <div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div>
-          </div>
-        </Card>
-      ))}
-      {ed!==null&&(
-        <Card accent="#6366f1">
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
-            <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
-            <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
-            <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
-          </div>
-          <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
-        </Card>
-      )}
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
     </div>
-  );
+    {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
+    {c.marketplaces.map((m,i)=><Card key={i}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div>
+      <strong style={{color:"var(--text)",fontSize:15}}>{info(m.code).name}</strong>
+      <div style={{marginTop:6,display:"flex",gap:6}}>
+        <span style={S.badge("var(--badge-neutral)")}>Qty fallback: {m.quantity}</span><span style={S.badge("var(--badge-neutral)")}>Lead: {m.leadtime}gg</span>
+      </div></div><div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div></div></Card>)}
+    {ed!==null&&<Card accent="#6366f1">
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
+        <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
+        <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
+        <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
+      </div>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0"}}>La quantità fallback viene usata solo se il fornitore non ha una colonna stock configurata.</p>
+      <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+    </Card>}
+  </div>
 }
 
-// ─── BlacklistTab ────────────────────────────────────────────────────────────
 function BlacklistTab({config:c,save}){
   const[inp,sInp]=useState("");
-  const add=()=>{const ne=inp.split(/[\n,;\s]+/).map(e=>e.trim()).filter(e=>e.length>=8&&!c.blacklist.includes(e));if(!ne.length)return;save({...c,blacklist:[...c.blacklist,...ne]});sInp("");};
+  const add=()=>{const ne=inp.split(/[\n,;\s]+/).map(e=>e.trim()).filter(e=>e.length>=8&&!c.blacklist.includes(e));if(!ne.length)return;save({...c,blacklist:[...c.blacklist,...ne]});sInp("")};
   const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)});
   const clr=()=>save({...c,blacklist:[]});
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
-        {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
-      </div>
-      <Card>
-        <label style={S.label}>Aggiungi EAN (uno per riga o separati da virgola)</label>
-        <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620"} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
-        <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
-      </Card>
-      {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
-        {c.blacklist.map(ean=>(
-          <span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
-            {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"var(--bl-text)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
-          </span>
-        ))}
-      </div></Card>}
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
+      {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
     </div>
-  );
-}
-
-// ─── ConvertTab ───────────────────────────────────────────────────────────────
-// Feature: 1) Progress indicator  2) Preview tabella  3) Priorità fornitore
-
-// Logica di risoluzione duplicati EAN
-// mode="price"    → vince il prezzo più basso (default)
-// mode="priority" → vince il fornitore con priorità più alta (ordine nella lista config)
-//                   a parità di priorità vince il prezzo più basso
-function resolveDuplicate(existing, candidate, mode, supplierPriority){
-  if(mode==="priority"){
-    const pa=supplierPriority[existing.supplier]??999;
-    const pb=supplierPriority[candidate.supplier]??999;
-    if(pb<pa)return candidate;   // priorità più alta (numero più basso) vince
-    if(pb===pa&&candidate.price<existing.price)return candidate; // parità → prezzo
-    return existing;
-  }
-  // default: prezzo più basso
-  return candidate.price<existing.price?candidate:existing;
+    <Card>
+      <label style={S.label}>Aggiungi EAN (uno per riga o separati da virgola)</label>
+      <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620"} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
+      <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
+    </Card>
+    {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
+      {c.blacklist.map(ean=><span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
+        {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"var(--bl-text)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+      </span>)}
+    </div></Card>}
+  </div>
 }
 
 function ConvertTab({config:c}){
   const[ups,sUps]=useState({});
   const[mpC,sMpC]=useState(c.marketplaces[0]?.code||"");
   const[qtyMode,sQtyMode]=useState("catalog");
-  const[dupMode,sDupMode]=useState("price"); // "price" | "priority"
-  const[progress,setProgress]=useState(null); // null | {phase,pct,msg}
-  const[previewRows,setPreviewRows]=useState(20);
-  const[showPreview,setShowPreview]=useState(true);
   const[res,sRes]=useState(null);
-  const[saving,setSaving]=useState(false);
-
   const hFile=useCallback((sn,file)=>{if(!file)return;sRes(null);const r=new FileReader();r.onload=e=>{sUps(p=>({...p,[sn]:{fn:file.name,d:e.target.result}}))};r.readAsText(file,"utf-8")},[]);
-  const rmUp=n=>{sUps(p=>{const x={...p};delete x[n];return x});sRes(null);};
-
-  // Mappa nome fornitore → indice priorità (0=massima)
-  const supplierPriority=Object.fromEntries(c.suppliers.map((s,i)=>[s.name,i]));
-
-  const convert=useCallback(()=>{
+  const rmUp=n=>{sUps(p=>{const x={...p};delete x[n];return x});sRes(null)};
+  const convert=()=>{
     const mp=c.marketplaces.find(m=>m.code===mpC);if(!mp)return;
-    sRes(null);
-
-    // Usiamo setTimeout per far respirare il browser tra le fasi
-    setTimeout(()=>{
-      setProgress({phase:1,pct:5,msg:"Lettura file fornitori..."});
-      const bl=new Set(c.blacklist);
-      const em={};
-      let tR=0,tS=0,dup=0,blk=0;
-      const errs=[];
-      const tierCounts={};const tierPriceSum={};
-      const allEntries=Object.entries(ups);
-      const total=allEntries.length;
-
-      const processSupplier=(idx)=>{
-        if(idx>=total){
-          // Fase 2: costruzione file
-          setProgress({phase:2,pct:80,msg:"Costruzione file di output..."});
-          setTimeout(()=>{
-            if(errs.length){sRes({error:errs.join("\n")});setProgress(null);return;}
-            const hd="sku\tproduct-id\tproduct-id-type\tprice\titem-condition\tquantity\tadd-delete\tleadtime-to-ship";
-            const ls=[hd];const sc={};
-            const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
-            let priceSum=0;
-            const previewData=[];
-            for(const it of sorted){
-              let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
-              const qty=qtyMode==="fixed"?String(mp.quantity):(it.stock!==null?String(it.stock):String(mp.quantity));
-              ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
-              sc[it.supplier]=(sc[it.supplier]||0)+1;
-              tierCounts[it.tierKey]=(tierCounts[it.tierKey]||0)+1;
-              tierPriceSum[it.tierKey]=(tierPriceSum[it.tierKey]||0)+it.rp;
-              priceSum+=it.rp;
-              if(previewData.length<50)previewData.push({sku:it.sku,ean:it.ean,costPrice:it.rp,salePrice:it.price,supplier:it.supplier,qty,tierKey:it.tierKey});
-            }
-            const ct=ls.join("\r\n")+"\r\n";
-            const avg_price_by_tier={};
-            Object.keys(tierCounts).forEach(k=>{avg_price_by_tier[k]=tierPriceSum[k]/tierCounts[k];});
-            setProgress({phase:3,pct:100,msg:"✓ Completato!"});
-            setTimeout(()=>{
-              setProgress(null);
-              sRes({
-                content:ct,total:sorted.length,totalRead:tR,totalSkipped:tS,
-                duplicatesResolved:dup,blacklisted:blk,supplierCounts:sc,previewData,
-                statsPayload:{marketplace:mpC,total_products:sorted.length,total_read:tR,
-                  total_skipped:tS,duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,
-                  by_tier:tierCounts,avg_price_by_tier,avg_price_total:sorted.length>0?priceSum/sorted.length:0}
-              });
-            },400);
-          },50);
-          return;
-        }
-
-        const pct=5+Math.round((idx/total)*70);
-        const[sn,up]=allEntries[idx];
-        setProgress({phase:1,pct,msg:`Elaborazione ${sn} (${idx+1}/${total})...`});
-
-        setTimeout(()=>{
-          const sup=c.suppliers.find(s=>s.name===sn);if(!sup){processSupplier(idx+1);return;}
-          const{h,r}=parseCSV(up.d,sup.delimiter);
-          const skC=fCol(h,sup.skuCol),enC=fCol(h,sup.eanCol),prC=fCol(h,sup.priceCol);
-          const stC=sup.stockCol?fCol(h,sup.stockCol):null;
-          if(!skC||!enC||!prC){errs.push(sn+": colonne non trovate: "+[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean).join(", "));processSupplier(idx+1);return;}
-          if(sup.stockCol&&!stC){errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata");processSupplier(idx+1);return;}
-          for(const row of r){
-            tR++;
-            const ean=(row[enC]||"").trim(),sku=(row[skC]||"").trim();
-            const rp=parseFloat((row[prC]||"0").replace(",","."));
-            if(!ean||ean.length<8||!sku||isNaN(rp)||rp<=0){tS++;continue;}
-            if(bl.has(ean)){blk++;continue;}
-            const tiers=sup.tiers||[];
-            const tierIdx=tiers.findIndex(t=>t.upTo===null||rp<=t.upTo);
-            const tierKey=tiers[tierIdx]?.upTo===null?`>${tiers[tierIdx-1]?.upTo??0}€`:`≤${tiers[tierIdx]?.upTo}€`;
-            const fp=applyTiers(rp,tiers);
-            const stock=stC?parseInt(row[stC])||0:null;
-            const candidate={sku,ean,price:fp,supplier:sn,stock,tierKey,rp};
-            if(em[ean]){dup++;em[ean]=resolveDuplicate(em[ean],candidate,dupMode,supplierPriority);}
-            else em[ean]=candidate;
-          }
-          processSupplier(idx+1);
-        },10);
-      };
-      processSupplier(0);
-    },30);
-  },[ups,mpC,qtyMode,dupMode,c]);
-
-  const dl=()=>{
-    if(!res?.content)return;
-    const b=new Blob([res.content],{type:"text/plain;charset=utf-8"});
-    const u=URL.createObjectURL(b);const a=document.createElement("a");
-    a.href=u;a.download="InventoryLoader_merged_"+mpC+"_"+new Date().toISOString().slice(0,10)+".txt";
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);
+    const bl=new Set(c.blacklist);const em={};
+    let tR=0,tS=0,dup=0,blk=0;const errs=[];
+    for(const[sn,up]of Object.entries(ups)){
+      const sup=c.suppliers.find(s=>s.name===sn);if(!sup)continue;
+      const{h,r}=parseCSV(up.d,sup.delimiter);
+      const skC=fCol(h,sup.skuCol),enC=fCol(h,sup.eanCol),prC=fCol(h,sup.priceCol);
+      const stC=sup.stockCol?fCol(h,sup.stockCol):null;
+      if(!skC||!enC||!prC){const ms=[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean);errs.push(sn+": colonne non trovate: "+ms.join(", "));continue}
+      if(sup.stockCol&&!stC){errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata");continue}
+      for(const row of r){
+        tR++;
+        const ean=(row[enC]||"").trim(),sku=(row[skC]||"").trim();
+        const rp=parseFloat((row[prC]||"0").replace(",","."));
+        if(!ean||ean.length<8||!sku||isNaN(rp)||rp<=0){tS++;continue}
+        if(bl.has(ean)){blk++;continue}
+        const fp=rp*(1+sup.markupPct/100)+sup.flatFee;
+        const stock=stC?parseInt(row[stC])||0:null;
+        if(em[ean]){dup++;if(fp<em[ean].price)em[ean]={sku,ean,price:fp,supplier:sn,stock}}
+        else em[ean]={sku,ean,price:fp,supplier:sn,stock}
+      }
+    }
+    if(errs.length){sRes({error:errs.join("\n")});return}
+    const hd="sku\tproduct-id\tproduct-id-type\tprice\titem-condition\tquantity\tadd-delete\tleadtime-to-ship";
+    const ls=[hd];const sc={};
+    const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
+    for(const it of sorted){
+      let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
+      const qty=qtyMode==="fixed"?String(mp.quantity):(it.stock!==null?String(it.stock):String(mp.quantity));
+      ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
+      sc[it.supplier]=(sc[it.supplier]||0)+1;
+    }
+    const ct=ls.join("\r\n")+"\r\n";
+    sRes({content:ct,total:sorted.length,totalRead:tR,totalSkipped:tS,duplicatesResolved:dup,blacklisted:blk,supplierCounts:sc});
   };
-
-  const saveToHistory=async()=>{
-    if(!res?.statsPayload)return;setSaving(true);
-    try{const r=await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(res.statsPayload)});if(!r.ok)throw new Error(`HTTP ${r.status}`);alert("✓ Salvato nello storico!");}
-    catch(e){alert("Errore: "+e.message);}finally{setSaving(false);}
-  };
-
+  const dl=()=>{if(!res?.content)return;const b=new Blob([res.content],{type:"text/plain;charset=utf-8"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="InventoryLoader_merged_"+mpC+"_"+new Date().toISOString().slice(0,10)+".txt";document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u)};
   if(!c.suppliers.length||!c.marketplaces.length)return<Card><p style={{color:"#f59e0b",textAlign:"center",margin:0}}>⚠️ Configura almeno un fornitore e un marketplace.</p></Card>;
   const uc=Object.keys(ups).length;
-
-  return(
-    <div>
-      {/* Marketplace */}
-      <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null);}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
-
-      {/* Quantità */}
-      <Card>
-        <label style={S.label}>Sorgente quantità</label>
-        <div style={{display:"flex",gap:12,marginTop:6}}>
-          {[{v:"catalog",l:"📦 Dal catalogo",d:"Usa la colonna stock del fornitore"},{v:"fixed",l:"🔒 Fissa",d:"Usa la quantità del marketplace"}].map(o=>(
-            <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null);}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:qtyMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
-              <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
-              <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* ── FEATURE 3: Modalità duplicati ── */}
-      <Card>
-        <label style={S.label}>Quando lo stesso EAN è presente in più fornitori</label>
-        <div style={{display:"flex",gap:12,marginTop:6}}>
-          {[
-            {v:"price",l:"💰 Prezzo più basso vince",d:"Sceglie sempre l'offerta con prezzo finale minore"},
-            {v:"priority",l:"⭐ Priorità fornitore",d:`Vince il fornitore con priorità più alta. Ordine attuale: ${c.suppliers.map(s=>s.name).join(" → ") || "—"}`}
-          ].map(o=>(
-            <div key={o.v} onClick={()=>{sDupMode(o.v);sRes(null);}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:dupMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:dupMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
-              <div style={{fontWeight:600,fontSize:14,color:dupMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
-              <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
-            </div>
-          ))}
-        </div>
-        {dupMode==="priority"&&<p style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>💡 La priorità segue l'ordine dei fornitori nella tab 🏭 Fornitori. Trascina o riordina lì per cambiare la precedenza.</p>}
-      </Card>
-
-      {/* Carica file */}
-      <div style={{marginBottom:14}}>
-        <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
-        {c.suppliers.map((sup,si)=>{const u=ups[sup.name];return(
-          <Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                {dupMode==="priority"&&<span style={{background:"var(--badge-neutral)",color:"var(--text)",borderRadius:6,padding:"1px 7px",fontSize:11,fontWeight:700}}>#{si+1}</span>}
-                <strong style={{color:"var(--text)",fontSize:14}}>{sup.name}</strong>
-                <span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{sup.tiers?`${sup.tiers.length} fasce`:"flat"}</span>
-                {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
-              </div>
-              {u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}
-            </div>
-            <div style={{display:"flex",gap:6}}>
-              {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
-              <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"#6366f1",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
-                {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
-              </label>
-            </div>
-          </Card>
-        );})}
+  return<div>
+    <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null)}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
+    <Card>
+      <label style={S.label}>Sorgente quantità</label>
+      <div style={{display:"flex",gap:12,marginTop:6}}>
+        {[{v:"catalog",l:"📦 Quantità dal catalogo",d:"Usa la colonna stock del fornitore (fallback: quantità marketplace)"},{v:"fixed",l:"🔒 Quantità fissa marketplace",d:"Usa sempre la quantità configurata nel marketplace"}].map(o=>
+          <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null)}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:qtyMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
+            <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
+            <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
+          </div>)}
       </div>
-
-      {/* Bottone genera */}
-      <div style={{textAlign:"center",marginBottom:14}}>
-        <Btn v="ok" onClick={convert} disabled={uc===0||!!progress} style={{padding:"12px 40px",fontSize:15}}>
-          {progress?"⏳ Elaborazione...":"⚡ Genera file unificato"}
-          {!progress&&` (${uc} ${uc===1?"fornitore":"fornitori"})`}
-        </Btn>
+      {qtyMode==="catalog"&&!c.suppliers.some(s=>s.stockCol)&&<p style={{color:"#f59e0b",fontSize:12,margin:"8px 0 0"}}>⚠️ Nessun fornitore ha una colonna stock configurata — verrà usata la quantità del marketplace come fallback.</p>}
+    </Card>
+    <div style={{marginBottom:14}}>
+      <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
+      {c.suppliers.map(sup=>{const u=ups[sup.name];return<Card key={sup.name} style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8}}>
+          <strong style={{color:"var(--text)",fontSize:14}}>{sup.name}</strong>
+          <span style={S.badge("var(--badge-ok)")}>+{sup.markupPct}% + {sup.flatFee}€</span>
+          {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
+        </div>{u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}</div>
+        <div style={{display:"flex",gap:6}}>
+          {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
+          <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"#6366f1",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+            {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
+          </label>
+        </div>
+      </Card>})}
+    </div>
+    <div style={{textAlign:"center",marginBottom:14}}>
+      <Btn v="ok" onClick={convert} disabled={uc===0} style={{padding:"12px 40px",fontSize:15}}>⚡ Genera file unificato ({uc} {uc===1?"fornitore":"fornitori"})</Btn>
+    </div>
+    {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
+    {res?.content&&<Card accent="#10b981">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+        <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
+        <Btn v="ok" onClick={dl} style={{fontSize:14}}>↓ Scarica .txt</Btn>
       </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
+        {[["Prodotti nel file",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>
+          <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{v.toLocaleString()}</div>
+            <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+          </div>)}
+      </div>
+      <label style={{...S.label,marginBottom:8}}>Prodotti per fornitore (vincenti)</label>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {Object.entries(res.supplierCounts).map(([n,ct])=><div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+          <strong style={{color:"var(--text)",fontSize:13}}>{n}</strong><span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
+        </div>)}
+      </div>
+    </Card>}
+  </div>
+}
 
-      {/* ── FEATURE 1: Progress bar ── */}
-      {progress&&(
-        <Card accent="#6366f1">
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <span style={{fontSize:13,color:"var(--text)",fontWeight:600}}>{progress.msg}</span>
-            <span style={{fontSize:12,color:"var(--accent-form)",fontWeight:700}}>{progress.pct}%</span>
+/* ==========================================================
+   SEZIONE FATTURAZIONE - Clienti
+   ========================================================== */
+function CustomersTab({inv,saveInv}){
+  const[ed,sEd]=useState(null);
+  const empty={name:"",vat:"",address1:"",city:"",zip:"",country:"Italy",email:"",phone:""};
+  const[f,sF]=useState(empty);
+  const nw=()=>{sF({...empty});sEd("new")};
+  const ed2=i=>{sF({...inv.customers[i]});sEd(i)};
+  const sv=()=>{
+    if(!f.name||!f.vat){alert("Nome e Partita IVA sono obbligatori");return}
+    const list=[...inv.customers];
+    if(ed==="new")list.push({...f,id:Date.now()});else list[ed]=f;
+    saveInv({...inv,customers:list});sEd(null);
+  };
+  const rm=i=>{if(!confirm("Eliminare il cliente?"))return;saveInv({...inv,customers:inv.customers.filter((_,j)=>j!==i)})};
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Clienti B2B</h3><Btn onClick={nw}>+ Aggiungi cliente</Btn>
+    </div>
+    {inv.customers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun cliente. Aggiungi il cliente B2B a cui emetterai fattura.</p></Card>}
+    {inv.customers.map((c,i)=><Card key={i}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <strong style={{color:"var(--text)",fontSize:15}}>{c.name}</strong>
+          <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
+            <span style={S.badge("var(--badge-info)")}>P.IVA: {c.vat}</span>
+            {c.country&&<span style={S.badge("var(--badge-neutral)")}>{c.country}</span>}
+          </div>
+          <div style={{color:"var(--text-muted)",fontSize:13,marginTop:6}}>
+            {c.address1}{c.address1&&", "}{c.zip} {c.city}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn>
+          <Btn v="danger" onClick={()=>rm(i)}>✕</Btn>
+        </div>
+      </div>
+    </Card>)}
+    {ed!==null&&<Card accent="#6366f1">
+      <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo cliente":"Modifica cliente"}</h4>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
+        <Inp label="Ragione sociale *" value={f.name} onChange={e=>sF({...f,name:e.target.value})}/>
+        <Inp label="Partita IVA (con prefisso paese) *" value={f.vat} onChange={e=>sF({...f,vat:e.target.value})} placeholder="es. IT12345678901"/>
+        <Inp label="Indirizzo" value={f.address1} onChange={e=>sF({...f,address1:e.target.value})}/>
+        <Inp label="CAP" value={f.zip} onChange={e=>sF({...f,zip:e.target.value})}/>
+        <Inp label="Città" value={f.city} onChange={e=>sF({...f,city:e.target.value})}/>
+        <Inp label="Paese" value={f.country} onChange={e=>sF({...f,country:e.target.value})}/>
+        <Inp label="Email" value={f.email} onChange={e=>sF({...f,email:e.target.value})}/>
+        <Inp label="Telefono" value={f.phone} onChange={e=>sF({...f,phone:e.target.value})}/>
+      </div>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"6px 0"}}>* campi obbligatori. Verifica che la P.IVA sia registrata in VIES per beneficiare dell'esenzione IVA art. 138 dir. 2006/112/CE.</p>
+      <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+    </Card>}
+  </div>
+}
+
+/* ==========================================================
+   SEZIONE FATTURAZIONE - Regole ricarico per fascia
+   ========================================================== */
+function MarkupTiersTab({inv,saveInv}){
+  const tiers=inv.markupTiers||[];
+  const upd=(idx,field,val)=>{
+    const list=[...tiers];list[idx]={...list[idx],[field]:val};
+    saveInv({...inv,markupTiers:list});
+  };
+  const add=()=>{
+    const last=tiers[tiers.length-1];
+    const newMin=last?parseFloat(last.max)||0:0;
+    saveInv({...inv,markupTiers:[...tiers,{id:Date.now(),min:newMin,max:newMin+100,markupPct:15,flatFee:0}]});
+  };
+  const rm=idx=>saveInv({...inv,markupTiers:tiers.filter((_,j)=>j!==idx)});
+  // simulazioni di esempio
+  const samples=[20,50,75,100,150];
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <div>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Regole ricarico per fascia di prezzo</h3>
+        <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Il prezzo di acquisto del pneumatico determina la fascia, e quindi il ricarico applicato.</p>
+      </div>
+      <Btn onClick={add}>+ Fascia</Btn>
+    </div>
+
+    <Card>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 40px",gap:8,alignItems:"center",marginBottom:8}}>
+        <label style={S.label}>Da € (incluso)</label>
+        <label style={S.label}>A € (escluso)</label>
+        <label style={S.label}>Ricarico %</label>
+        <label style={S.label}>+ Fisso €</label>
+        <span></span>
+      </div>
+      {tiers.map((t,i)=><div key={t.id||i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 40px",gap:8,alignItems:"center",marginBottom:6}}>
+        <input type="number" step="0.01" value={t.min} onChange={e=>upd(i,"min",e.target.value)} style={S.input}/>
+        <input type="number" step="0.01" value={t.max} onChange={e=>upd(i,"max",e.target.value)} style={S.input}/>
+        <input type="number" step="0.01" value={t.markupPct} onChange={e=>upd(i,"markupPct",e.target.value)} style={S.input}/>
+        <input type="number" step="0.01" value={t.flatFee} onChange={e=>upd(i,"flatFee",e.target.value)} style={S.input}/>
+        <Btn v="danger" onClick={()=>rm(i)} style={{padding:"6px 10px"}}>✕</Btn>
+      </div>)}
+      {tiers.length===0&&<p style={{color:"var(--text-muted)",margin:"10px 0",textAlign:"center"}}>Nessuna fascia. Aggiungine almeno una.</p>}
+    </Card>
+
+    <Card>
+      <label style={S.label}>Anteprima ricarichi</label>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginTop:6}}>
+        {samples.map(p=>{
+          const out=applyMarkup(p,tiers);
+          const tier=tiers.find(t=>p>=parseFloat(t.min)&&p<parseFloat(t.max))||tiers[tiers.length-1];
+          return<div key={p} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 12px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Acquisto € {p.toFixed(2)}</div>
+            <div style={{fontSize:18,fontWeight:700,color:"var(--text)",marginTop:2}}>€ {fmtEur(out)}</div>
+            {tier&&<div style={{fontSize:10,color:"var(--text-muted)",marginTop:2}}>+{tier.markupPct}% + {tier.flatFee}€</div>}
+          </div>;
+        })}
+      </div>
+    </Card>
+  </div>
+}
+
+/* ==========================================================
+   SEZIONE FATTURAZIONE - Genera fattura
+   ========================================================== */
+function InvoiceGenTab({inv,saveInv}){
+  const[file,sFile]=useState(null);
+  const[parsing,sParsing]=useState(false);
+  const[parsed,sParsed]=useState(null);
+  const[parseErr,sParseErr]=useState(null);
+  const[customerId,sCustomerId]=useState(inv.customers[0]?.id||"");
+  const[invDate,sInvDate]=useState(todayIso());
+  const[invNumOverride,sInvNumOverride]=useState("");
+  const[generated,sGen]=useState(false);
+
+  const next=useMemo(()=>nextInvoiceNumber(inv),[inv.lastInvoiceNumber,inv.invoiceYear]);
+  const effectiveInvNum=invNumOverride.trim()||next.formatted;
+
+  const handleFile=async(f)=>{
+    if(!f)return;
+    sFile(f);sParsed(null);sParseErr(null);sParsing(true);sGen(false);
+    try{
+      const txt=await extractTextFromPDF(f);
+      const result=parseDeldo(txt);
+      if(!result.orders.length){sParseErr("Nessun ordine trovato nel PDF. Verifica che sia una fattura Deldo valida.");}
+      else sParsed(result);
+    }catch(e){sParseErr("Errore nel parsing: "+e.message);console.error(e);}
+    finally{sParsing(false);}
+  };
+
+  // calcola le righe finali con ricarico applicato
+  const computed=useMemo(()=>{
+    if(!parsed)return null;
+    const lines=[];
+    let totalNet=0,totalGross=0,totalQty=0;
+    for(const ord of parsed.orders){
+      for(const it of ord.items){
+        const unitMarked=applyMarkup(it.unitPrice,inv.markupTiers);
+        const lineTotal=unitMarked*it.quantity;
+        const cost=it.unitPrice*it.quantity;
+        totalNet+=cost;totalGross+=lineTotal;totalQty+=it.quantity;
+        lines.push({
+          orderRef:ord.ref2,
+          clientName:ord.client.name,
+          clientAddr:[ord.client.street,ord.client.city,ord.client.country].filter(Boolean).join(", "),
+          quantity:it.quantity,
+          description:it.description,
+          unitCost:it.unitPrice,
+          unitPrice:unitMarked,
+          lineTotal,
+          cost
+        });
+      }
+    }
+    return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet};
+  },[parsed,inv.markupTiers]);
+
+  const customer=inv.customers.find(c=>String(c.id)===String(customerId));
+
+  const generatePDF=()=>{
+    if(!computed||!customer)return;
+
+    // controllo duplicati
+    const existing=(inv.invoices||[]).find(x=>x.number===effectiveInvNum);
+    if(existing){
+      const ok=confirm(`Esiste già una fattura con numero ${effectiveInvNum} (emessa il ${isoToIt(existing.date)} a ${existing.customerName}, totale € ${fmtEur(existing.total)}).\n\nProcedere comunque con l'emissione?\nLa nuova fattura sostituirà la voce nello storico.`);
+      if(!ok)return;
+    }
+
+    const{jsPDF}=window.jspdf;
+    const doc=new jsPDF({unit:"mm",format:"a4"});
+    const pw=doc.internal.pageSize.getWidth();
+
+    // ===== HEADER =====
+    doc.setFont("helvetica","bold");doc.setFontSize(20);
+    doc.text("FATTURA / INVOICE",pw-15,18,{align:"right"});
+
+    doc.setFontSize(11);doc.setFont("helvetica","bold");
+    doc.text(ISSUER.name,15,18);
+    doc.setFont("helvetica","normal");doc.setFontSize(9);
+    doc.text(ISSUER.address1,15,23);
+    doc.text(ISSUER.address2,15,27);
+    doc.text(ISSUER.country,15,31);
+    doc.text("VAT: "+ISSUER.vat,15,35);
+
+    // riquadro numero/data fattura
+    doc.setDrawColor(180);doc.setLineWidth(.3);
+    doc.line(15,42,pw-15,42);
+
+    doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
+    doc.text("NUMERO FATTURA",15,48);
+    doc.text("DATA FATTURA",70,48);
+    doc.text("PARTITA IVA EMITTENTE",125,48);
+    doc.setTextColor(0);doc.setFont("helvetica","normal");doc.setFontSize(11);
+    doc.text(effectiveInvNum,15,53);
+    doc.text(isoToIt(invDate),70,53);
+    doc.text(ISSUER.vat,125,53);
+
+    doc.line(15,58,pw-15,58);
+
+    // ===== CLIENTE =====
+    doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
+    doc.text("FATTURATO A:",15,65);
+    doc.setTextColor(0);doc.setFont("helvetica","bold");doc.setFontSize(11);
+    doc.text(customer.name,15,71);
+    doc.setFont("helvetica","normal");doc.setFontSize(10);
+    let yy=76;
+    if(customer.address1){doc.text(customer.address1,15,yy);yy+=4.5}
+    if(customer.zip||customer.city){doc.text(`${customer.zip||""} ${customer.city||""}`.trim(),15,yy);yy+=4.5}
+    if(customer.country){doc.text(customer.country,15,yy);yy+=4.5}
+    doc.setFont("helvetica","bold");
+    doc.text("P.IVA: "+customer.vat,15,yy);
+
+    // ===== TABELLA RIGHE =====
+    const body=computed.lines.map(l=>[
+      String(l.quantity),
+      l.description,
+      l.clientName+(l.clientAddr?"\n"+l.clientAddr:""),
+      fmtEur(l.unitPrice),
+      fmtEur(l.lineTotal)
+    ]);
+
+    doc.autoTable({
+      startY:Math.max(yy+8,100),
+      head:[["Q.tà","Descrizione pneumatico","Indirizzo di consegna","Prezzo unit. €","Totale €"]],
+      body,
+      theme:"grid",
+      styles:{font:"helvetica",fontSize:8.5,cellPadding:2.5,lineColor:[200,200,200]},
+      headStyles:{fillColor:[60,60,80],textColor:[255,255,255],fontStyle:"bold",fontSize:9},
+      columnStyles:{
+        0:{halign:"center",cellWidth:14},
+        1:{cellWidth:60},
+        2:{cellWidth:60,fontSize:7.5},
+        3:{halign:"right",cellWidth:22},
+        4:{halign:"right",cellWidth:22}
+      },
+      margin:{left:15,right:15}
+    });
+
+    let endY=doc.lastAutoTable.finalY+5;
+    if(endY>250){doc.addPage();endY=20}
+
+    // ===== TOTALI =====
+    doc.setDrawColor(180);
+    doc.line(120,endY,pw-15,endY);
+    endY+=5;
+    doc.setFontSize(10);doc.setFont("helvetica","normal");
+    doc.text("Imponibile:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=5;
+    doc.text("IVA (esente):",120,endY);doc.text("€ 0,00",pw-15,endY,{align:"right"});endY+=5;
+    doc.setFont("helvetica","bold");doc.setFontSize(12);
+    doc.text("TOTALE:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=8;
+
+    // ===== NOTE =====
+    doc.setFont("helvetica","italic");doc.setFontSize(9);doc.setTextColor(80);
+    const noteLines=[
+      "Operazione non imponibile IVA - Cessione intracomunitaria di beni",
+      "ex art. 138 Direttiva 2006/112/CE - Reverse charge in capo al cessionario.",
+      "VAT exempt - Intra-Community supply of goods (Art. 138 EU VAT Directive 2006/112/EC).",
+    ];
+    if(parsed?.meta?.supplierInvNum){
+      noteLines.push("");
+      noteLines.push(`Riferimento fornitura: fattura ${parsed.meta.supplierInvNum} del ${parsed.meta.supplierInvDate}`);
+    }
+    noteLines.forEach(l=>{doc.text(l,15,endY);endY+=4.5});
+
+    // ===== FOOTER =====
+    doc.setTextColor(120);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
+    const fy=doc.internal.pageSize.getHeight()-12;
+    doc.text(`${ISSUER.name} • ${ISSUER.address1}, ${ISSUER.address2}, ${ISSUER.country} • VAT ${ISSUER.vat}`,pw/2,fy,{align:"center"});
+
+    // download immediato del PDF
+    const fname=`Fattura_${effectiveInvNum.replace(/[\/\\]/g,"-")}_${customer.name.replace(/[^a-z0-9]/gi,"_").slice(0,20)}.pdf`;
+    doc.save(fname);
+
+    // ===== STORICO: salva PDF in base64 + metadati =====
+    const pdfDataUri=doc.output("datauristring"); // "data:application/pdf;base64,..."
+    const pdfBase64=pdfDataUri.split(",")[1];
+
+    const record={
+      id:Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      number:effectiveInvNum,
+      date:invDate,
+      filename:fname,
+      customerId:customer.id,
+      customerName:customer.name,
+      customerVat:customer.vat,
+      total:computed.totalGross,
+      cost:computed.totalNet,
+      margin:computed.margin,
+      qty:computed.totalQty,
+      lineCount:computed.lines.length,
+      supplierInvNum:parsed?.meta?.supplierInvNum||null,
+      supplierInvDate:parsed?.meta?.supplierInvDate||null,
+      lines:computed.lines.map(l=>({
+        quantity:l.quantity,description:l.description,
+        clientName:l.clientName,clientAddr:l.clientAddr,
+        unitCost:l.unitCost,unitPrice:l.unitPrice,
+        lineTotal:l.lineTotal
+      })),
+      pdfBase64,
+      createdAt:new Date().toISOString()
+    };
+
+    // rimuovi eventuale duplicato (stesso numero) e aggiungi nuovo
+    const filtered=(inv.invoices||[]).filter(x=>x.number!==effectiveInvNum);
+    const newInvoices=[record,...filtered];
+    // aggiorna numerazione solo se NON manuale e non era duplicato
+    const newState={
+      ...inv,
+      invoices:newInvoices,
+      ...(invNumOverride.trim()||existing?{}:{lastInvoiceNumber:next.num,invoiceYear:next.year})
+    };
+
+    try{
+      saveInv(newState);
+      sGen(true);
+    }catch(e){
+      // QuotaExceededError: localStorage pieno
+      console.error(e);
+      alert("⚠️ Storage pieno: il PDF è stato scaricato ma NON salvato nello storico.\nVai nella tab 'Storico' e cancella le fatture più vecchie per liberare spazio.");
+      // salva senza il base64 per almeno mantenere i metadati
+      try{
+        const lightRecord={...record,pdfBase64:null,_storageOmitted:true};
+        const lightInvoices=[lightRecord,...filtered];
+        saveInv({...newState,invoices:lightInvoices});
+        sGen(true);
+      }catch(e2){
+        console.error(e2);
+      }
+    }
+  };
+
+  return<div>
+    {/* ====== STEP 1: CARICAMENTO PDF ====== */}
+    <Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fattura passiva (PDF Deldo)</h3>
+      {!file&&<label style={{display:"block",padding:"30px",borderRadius:10,background:"var(--bg-input)",border:"2px dashed var(--border-input)",textAlign:"center",cursor:"pointer"}}>
+        <div style={{fontSize:32,marginBottom:6}}>📄</div>
+        <div style={{color:"var(--text)",fontWeight:600}}>Clicca per caricare il PDF della fattura passiva</div>
+        <div style={{color:"var(--text-muted)",fontSize:12,marginTop:4}}>Formato Deldo Autobanden NV (.pdf)</div>
+        <input type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+      </label>}
+      {file&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"var(--bg-input)",borderRadius:8,border:"1px solid var(--border-input)"}}>
+        <div>
+          <strong style={{color:"var(--text)"}}>📄 {file.name}</strong>
+          {parsing&&<div style={{color:"#f59e0b",fontSize:12,marginTop:4}}>⏳ Estrazione in corso...</div>}
+          {parsed&&<div style={{color:"#10b981",fontSize:12,marginTop:4}}>✓ {parsed.orders.length} ordini, {parsed.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.quantity,0),0)} pezzi</div>}
+          {parseErr&&<div style={{color:"#ef4444",fontSize:12,marginTop:4}}>❌ {parseErr}</div>}
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <label style={{padding:"6px 12px",borderRadius:6,background:"var(--border)",color:"var(--text)",fontWeight:600,fontSize:12,cursor:"pointer"}}>
+            Sostituisci<input type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+          </label>
+          <Btn v="danger" onClick={()=>{sFile(null);sParsed(null);sParseErr(null);sGen(false)}} style={{fontSize:11}}>✕</Btn>
+        </div>
+      </div>}
+    </Card>
+
+    {/* ====== STEP 2: ANTEPRIMA RIGHE ====== */}
+    {parsed&&computed&&<Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>2. Anteprima righe estratte</h3>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,marginBottom:12}}>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Ordini</div>
+          <div style={{fontSize:18,fontWeight:700}}>{parsed.orders.length}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Pezzi</div>
+          <div style={{fontSize:18,fontWeight:700}}>{computed.totalQty}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Costo</div>
+          <div style={{fontSize:18,fontWeight:700}}>€ {fmtEur(computed.totalNet)}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Vendita</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.totalGross)}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.margin)}</div>
+        </div>
+      </div>
+      <div style={{maxHeight:280,overflowY:"auto",border:"1px solid var(--border)",borderRadius:8}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead style={{background:"var(--bg-input)",position:"sticky",top:0}}>
+            <tr>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Acquisto</th>
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Vendita</th>
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
+            </tr>
+          </thead>
+          <tbody>
+            {computed.lines.map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)"}}>
+              <td style={{padding:8}}>{l.quantity}</td>
+              <td style={{padding:8}}>{l.description}</td>
+              <td style={{padding:8,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
+              <td style={{padding:8,textAlign:"right",color:"var(--text-muted)"}}>€ {fmtEur(l.unitCost)}</td>
+              <td style={{padding:8,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
+              <td style={{padding:8,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </Card>}
+
+    {/* ====== STEP 3: DATI FATTURA ====== */}
+    {parsed&&<Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>3. Dati fattura attiva</h3>
+      {inv.customers.length===0?
+        <p style={{color:"#f59e0b",margin:0}}>⚠️ Nessun cliente configurato. Aggiungilo nella tab "Clienti".</p>
+        :<>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:"0 14px"}}>
+            <Sel label="Cliente B2B *" value={customerId} onChange={e=>sCustomerId(e.target.value)} options={inv.customers.map(c=>({v:c.id,l:c.name+" - "+c.vat}))}/>
+            <Inp label="Numero fattura" value={invNumOverride} onChange={e=>sInvNumOverride(e.target.value)} placeholder={next.formatted}/>
+            <Inp label="Data fattura" type="date" value={invDate} onChange={e=>sInvDate(e.target.value)}/>
+          </div>
+          <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0 12px"}}>
+            Numero progressivo automatico: <strong>{next.formatted}</strong>. Se lasci vuoto il campo viene usato questo, e dopo l'emissione il contatore avanza automaticamente.
+          </p>
+          <div style={{textAlign:"center"}}>
+            <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>
+              📄 Genera fattura PDF
+            </Btn>
+          </div>
+          {generated&&<div style={{textAlign:"center",marginTop:12,color:"#10b981",fontSize:13}}>
+            ✓ PDF generato, scaricato e salvato in <strong>Storico</strong>. Prossima fattura: {nextInvoiceNumber({...inv,lastInvoiceNumber:next.num,invoiceYear:next.year}).formatted}
+          </div>}
+        </>}
+    </Card>}
+  </div>
+}
+
+/* ==========================================================
+   STORICO FATTURE EMESSE
+   Lista, ricerca, filtro, ridownload PDF, eliminazione
+   ========================================================== */
+function HistoryTab({inv,saveInv}){
+  const invoices=inv.invoices||[];
+  const[query,sQuery]=useState("");
+  const[yearFilter,sYearFilter]=useState("all");
+  const[expanded,sExpanded]=useState(null);
+
+  // calcolo uso storage approssimativo
+  const storageInfo=useMemo(()=>{
+    try{
+      const raw=localStorage.getItem(INV_KEY)||"";
+      const bytes=new Blob([raw]).size;
+      const mb=bytes/1024/1024;
+      // stima quota: la maggior parte dei browser ha 5-10MB. Mostriamo barra su 5MB.
+      const limit=5;
+      const pct=Math.min(100,(mb/limit)*100);
+      return {mb,pct,limit};
+    }catch{return {mb:0,pct:0,limit:5};}
+  },[invoices.length,inv]);
+
+  // anni disponibili nello storico
+  const years=useMemo(()=>{
+    const set=new Set(invoices.map(x=>(x.date||"").slice(0,4)).filter(Boolean));
+    return [...set].sort().reverse();
+  },[invoices]);
+
+  // filtri applicati
+  const filtered=useMemo(()=>{
+    let list=[...invoices];
+    if(yearFilter!=="all")list=list.filter(x=>(x.date||"").startsWith(yearFilter));
+    if(query.trim()){
+      const q=query.trim().toLowerCase();
+      list=list.filter(x=>
+        (x.number||"").toLowerCase().includes(q) ||
+        (x.customerName||"").toLowerCase().includes(q) ||
+        (x.customerVat||"").toLowerCase().includes(q) ||
+        (x.supplierInvNum||"").toLowerCase().includes(q)
+      );
+    }
+    list.sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""));
+    return list;
+  },[invoices,query,yearFilter]);
+
+  // statistiche aggregate sul filtrato
+  const stats=useMemo(()=>{
+    const totRev=filtered.reduce((s,x)=>s+(x.total||0),0);
+    const totMargin=filtered.reduce((s,x)=>s+(x.margin||0),0);
+    const totQty=filtered.reduce((s,x)=>s+(x.qty||0),0);
+    return {count:filtered.length,totRev,totMargin,totQty};
+  },[filtered]);
+
+  const downloadPDF=(rec)=>{
+    if(!rec.pdfBase64){
+      alert("PDF non disponibile per questa fattura (non era stato salvato per limiti di storage).");
+      return;
+    }
+    try{
+      const bin=atob(rec.pdfBase64);
+      const arr=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+      const blob=new Blob([arr],{type:"application/pdf"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;a.download=rec.filename||`Fattura_${rec.number}.pdf`;
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){
+      console.error(e);
+      alert("Errore nel download del PDF: "+e.message);
+    }
+  };
+
+  const removeOne=(rec)=>{
+    if(!confirm(`Eliminare la fattura ${rec.number} dallo storico?\n\nIl PDF già scaricato rimarrà nel tuo computer, ma non potrà più essere ri-scaricato da qui.`))return;
+    saveInv({...inv,invoices:invoices.filter(x=>x.id!==rec.id)});
+  };
+
+  const clearAll=()=>{
+    if(!confirm("⚠️ Eliminare TUTTO lo storico? Questa operazione non può essere annullata."))return;
+    if(!confirm("Sei davvero sicuro? Verranno persi i PDF di tutte le fatture emesse."))return;
+    saveInv({...inv,invoices:[]});
+  };
+
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:12,flexWrap:"wrap"}}>
+      <div>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Storico fatture emesse <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({invoices.length})</span></h3>
+        <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Ogni fattura include il PDF originale ri-scaricabile.</p>
+      </div>
+      {invoices.length>0&&<Btn v="danger" onClick={clearAll} style={{fontSize:12}}>Svuota storico</Btn>}
+    </div>
+
+    {invoices.length===0?
+      <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna fattura emessa. Vai su "Genera fattura" per crearne una.</p></Card>
+      :<>
+        {/* statistiche */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Fatture {yearFilter==="all"?"totali":yearFilter}</div>
+            <div style={{fontSize:22,fontWeight:700}}>{stats.count}</div>
+          </div>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Pezzi venduti</div>
+            <div style={{fontSize:22,fontWeight:700}}>{stats.totQty}</div>
+          </div>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Fatturato</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#10b981"}}>€ {fmtEur(stats.totRev)}</div>
+          </div>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#10b981"}}>€ {fmtEur(stats.totMargin)}</div>
+          </div>
+        </div>
+
+        {/* storage usage */}
+        <Card style={{padding:12,marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontSize:12,color:"var(--text-label)",fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Spazio storage</span>
+            <span style={{fontSize:12,color:"var(--text-muted)"}}>{storageInfo.mb.toFixed(2)} MB / ~{storageInfo.limit} MB</span>
           </div>
           <div style={{background:"var(--bg-input)",borderRadius:6,height:8,overflow:"hidden"}}>
-            <div style={{height:"100%",width:`${progress.pct}%`,background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:6,transition:"width .3s ease"}}/>
+            <div style={{width:storageInfo.pct+"%",height:"100%",background:storageInfo.pct>80?"#ef4444":storageInfo.pct>60?"#f59e0b":"#10b981",transition:"width .3s"}}/>
           </div>
-          <p style={{fontSize:11,color:"var(--text-muted)",marginTop:6}}>Fase {progress.phase}/3 — il browser rimane responsivo durante l'elaborazione</p>
+          {storageInfo.pct>80&&<p style={{color:"#ef4444",fontSize:12,margin:"6px 0 0"}}>⚠️ Spazio quasi esaurito. Elimina le fatture più vecchie per evitare problemi.</p>}
         </Card>
-      )}
 
-      {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
-
-      {res?.content&&(
-        <div>
-          {/* Riepilogo KPI */}
-          <Card accent="#10b981">
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
-              <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <Btn v="ok" onClick={dl} style={{fontSize:14}}>↓ Scarica .txt</Btn>
-                <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>
-                  {saving?"Salvataggio...":"📊 Salva nello storico"}
-                </Btn>
-              </div>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-              {[["Prodotti",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>(
-                <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-                  <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{v.toLocaleString()}</div>
-                  <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
-                </div>
-              ))}
-            </div>
-            <label style={{...S.label,marginBottom:8}}>Per fornitore vincente</label>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {Object.entries(res.supplierCounts).map(([n,ct])=>(
-                <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-                  <strong style={{color:"var(--text)",fontSize:13}}>{n}</strong>
-                  <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* ── FEATURE 2: Anteprima tabella ── */}
-          {res.previewData&&res.previewData.length>0&&(
-            <Card>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                <h4 style={{margin:0,fontSize:14,color:"var(--text)"}}>
-                  👁 Anteprima prime {Math.min(previewRows,res.previewData.length)} righe
-                  <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12,marginLeft:8}}>su {res.total.toLocaleString()} totali</span>
-                </h4>
-                <Btn v="ghost" onClick={()=>setShowPreview(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>
-                  {showPreview?"Nascondi":"Mostra"}
-                </Btn>
-              </div>
-              {showPreview&&(
-                <div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead>
-                        <tr style={{borderBottom:"2px solid var(--border)"}}>
-                          {["EAN","SKU","Fascia","Costo (€)","Vendita (€)","Netto est.","Fornitore","Qty"].map(h=>(
-                            <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {res.previewData.slice(0,previewRows).map((row,i)=>{
-                          const net=(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2);
-                          const netColor=parseFloat(net)>0?"#10b981":"#ef4444";
-                          return(
-                            <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)"}}>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.costPrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{row.salePrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:netColor}}>{net}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  {res.previewData.length>previewRows&&(
-                    <div style={{textAlign:"center",marginTop:10}}>
-                      <Btn v="ghost" onClick={()=>setPreviewRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20 righe</Btn>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          )}
+        {/* filtri */}
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:10,marginBottom:14}}>
+          <input value={query} onChange={e=>sQuery(e.target.value)} placeholder="🔍 Cerca per numero, cliente, P.IVA, riferimento fornitore..." style={S.input}/>
+          <select value={yearFilter} onChange={e=>sYearFilter(e.target.value)} style={S.input}>
+            <option value="all">Tutti gli anni</option>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
         </div>
-      )}
-    </div>
-  );
+
+        {/* lista fatture */}
+        {filtered.length===0?
+          <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna fattura corrisponde ai filtri.</p></Card>
+          :filtered.map(rec=>{
+            const isOpen=expanded===rec.id;
+            return<Card key={rec.id} style={{padding:0,overflow:"hidden"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer"}} onClick={()=>sExpanded(isOpen?null:rec.id)}>
+                <div style={{display:"flex",alignItems:"center",gap:14,flex:1,minWidth:0}}>
+                  <div style={{minWidth:90}}>
+                    <div style={{fontWeight:700,color:"var(--text)",fontSize:14}}>{rec.number}</div>
+                    <div style={{fontSize:11,color:"var(--text-muted)"}}>{isoToIt(rec.date)}</div>
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,color:"var(--text)",fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{rec.customerName}</div>
+                    <div style={{fontSize:11,color:"var(--text-muted)"}}>{rec.customerVat} • {rec.qty} pz • {rec.lineCount} righe</div>
+                  </div>
+                  <div style={{textAlign:"right",minWidth:100}}>
+                    <div style={{fontWeight:700,color:"#10b981",fontSize:14}}>€ {fmtEur(rec.total)}</div>
+                    {rec.margin!==undefined&&<div style={{fontSize:11,color:"var(--text-muted)"}}>marg. € {fmtEur(rec.margin)}</div>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:14}}>
+                  {rec._storageOmitted&&<span style={S.badge("var(--badge-warn)")} title="PDF non salvato">⚠</span>}
+                  {!rec._storageOmitted&&rec.pdfBase64&&<Btn v="ok" onClick={(e)=>{e.stopPropagation();downloadPDF(rec)}} style={{fontSize:12,padding:"6px 12px"}}>↓ PDF</Btn>}
+                  <Btn v="danger" onClick={(e)=>{e.stopPropagation();removeOne(rec)}} style={{fontSize:12,padding:"6px 10px"}}>✕</Btn>
+                  <span style={{color:"var(--text-muted)",fontSize:12,marginLeft:4,minWidth:14,textAlign:"center"}}>{isOpen?"▲":"▼"}</span>
+                </div>
+              </div>
+              {isOpen&&<div style={{borderTop:"1px solid var(--border)",padding:"14px 18px",background:"var(--bg-input)"}}>
+                {rec.supplierInvNum&&<div style={{fontSize:12,color:"var(--text-muted)",marginBottom:10}}>
+                  Riferimento fornitura: fattura <strong>{rec.supplierInvNum}</strong> del {rec.supplierInvDate}
+                </div>}
+                <div style={{maxHeight:240,overflowY:"auto",border:"1px solid var(--border)",borderRadius:6}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead style={{background:"var(--bg-card)",position:"sticky",top:0}}>
+                      <tr>
+                        <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
+                        <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
+                        <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
+                        <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Prezzo</th>
+                        <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(rec.lines||[]).map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)"}}>
+                        <td style={{padding:6}}>{l.quantity}</td>
+                        <td style={{padding:6}}>{l.description}</td>
+                        <td style={{padding:6,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
+                        <td style={{padding:6,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
+                        <td style={{padding:6,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
+                      </tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </div>}
+            </Card>;
+          })
+        }
+      </>
+    }
+  </div>
 }
 
-// ─── Alert Bell ──────────────────────────────────────────────────────────────
-function AlertBell({onClick,count}){
-  return(
-    <button onClick={onClick} title="Notifiche" style={{position:"relative",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
-      🔔
-      {count>0&&<span style={{position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",borderRadius:"50%",fontSize:9,fontWeight:700,width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center"}}>{count>9?"9+":count}</span>}
-    </button>
-  );
-}
-
-// ─── Auto Tab (FTP fetch + file pronto) ──────────────────────────────────────
-function AutoTab(){
-  const[status,setStatus]=useState(null); // null | loading | ready | error
-  const[result,setResult]=useState(null);
-  const[generating,setGenerating]=useState(false);
-  const[marketplace,setMarketplace]=useState("IT");
-  const[dupMode,setDupMode]=useState("price");
-  const[previewRows,setPreviewRows]=useState(20);
-  const[showPreview,setShowPreview]=useState(true);
-  const[saving,setSaving]=useState(false);
-
-  // Carica l'ultimo risultato già pronto
-  const loadLatest=async()=>{
-    setStatus("loading");
-    try{
-      const r=await fetch("/api/ftp-convert");
-      if(!r.ok)throw new Error(`HTTP ${r.status}`);
-      const data=await r.json();
-      if(data){setResult(data);setStatus("ready");}
-      else{setStatus(null);}
-    }catch(e){setStatus("error");console.error(e);}
-  };
-
-  useEffect(()=>{loadLatest();},[]);
-
-  const generate=async()=>{
-    setGenerating(true);setResult(null);
-    try{
-      const r=await fetch("/api/ftp-convert",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({marketplace,dupMode})
-      });
-      const data=await r.json();
-      if(!r.ok)throw new Error(data.error||`HTTP ${r.status}`);
-      await loadLatest();
-    }catch(e){
-      setStatus("error");
-      setResult({error:e.message});
-    }finally{setGenerating(false);}
-  };
-
-  const dl=()=>{
-    if(!result?.fileContent)return;
-    const b=new Blob([result.fileContent],{type:"text/plain;charset=utf-8"});
-    const u=URL.createObjectURL(b);const a=document.createElement("a");
-    a.href=u;a.download=result.filename||"inventory.txt";
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);
-  };
-
-  const saveToHistory=async()=>{
-    if(!result?.stats)return;setSaving(true);
-    try{
-      await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(result.stats)});
-      alert("✓ Salvato nello storico!");
-    }catch(e){alert("Errore: "+e.message);}
-    finally{setSaving(false);}
-  };
-
-  const fmtDate=iso=>{
-    if(!iso)return"—";
-    return new Date(iso).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
-  };
-
-  return(
-    <div>
-      {/* Info scheduled */}
-      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
-        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-          <span style={{fontSize:24}}>🤖</span>
-          <div>
-            <div style={{fontWeight:700,color:"var(--info-text)",marginBottom:4}}>Generazione automatica attiva</div>
-            <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
-              Ogni mattina alle <strong>9:15</strong> (Lun–Sab) il sistema scarica automaticamente i CSV dall'FTP, 
-              esegue la conversione e tiene il file pronto qui. Voi aprite il sito, cliccate Scarica, caricate su Amazon. Fine.
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Controlli manuali */}
-      <Card>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-          <div>
-            <label style={S.label}>Marketplace</label>
-            <select value={marketplace} onChange={e=>setMarketplace(e.target.value)} style={S.input}>
-              {[{v:"IT",l:"Amazon.it"},{v:"DE",l:"Amazon.de"},{v:"FR",l:"Amazon.fr"},{v:"ES",l:"Amazon.es"}].map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={S.label}>Risoluzione duplicati EAN</label>
-            <select value={dupMode} onChange={e=>setDupMode(e.target.value)} style={S.input}>
-              <option value="price">💰 Prezzo più basso</option>
-              <option value="priority">⭐ Priorità fornitore</option>
-            </select>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <Btn v="pri" onClick={generate} disabled={generating} style={{fontSize:14,padding:"10px 24px"}}>
-            {generating?"⏳ Scaricando dall'FTP...":"📥 Genera adesso da FTP"}
-          </Btn>
-          <Btn v="ghost" onClick={loadLatest} style={{fontSize:13}}>↻ Ricarica</Btn>
-          <span style={{fontSize:11,color:"var(--text-muted)"}}>oppure aspetta la generazione automatica delle 9:15</span>
-        </div>
-      </Card>
-
-      {/* Errore */}
-      {result?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0}}>❌ {result.error}</p></Card>}
-
-      {/* File pronto */}
-      {status==="ready"&&result?.stats&&(
-        <div>
-          <Card accent="#10b981">
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
-              <div>
-                <h4 style={{color:"#10b981",margin:"0 0 4px"}}>✓ File pronto</h4>
-                <div style={{fontSize:12,color:"var(--text-muted)"}}>Generato il {fmtDate(result.stats.generated_at)} • {result.filename}</div>
-              </div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <Btn v="ok" onClick={dl} style={{fontSize:14,padding:"10px 24px"}}>↓ Scarica .txt</Btn>
-                <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>
-                  {saving?"Salvataggio...":"📊 Salva nello storico"}
-                </Btn>
-              </div>
-            </div>
-
-            {/* KPI */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:14}}>
-              {[
-                ["Prodotti",result.stats.total_products],
-                ["Righe lette",result.stats.total_read],
-                ["Scartate",result.stats.total_skipped],
-                ["Duplicati",result.stats.duplicates_resolved],
-                ["Blacklist",result.stats.blacklisted],
-              ].map(([l,v])=>(
-                <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-                  <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
-                  <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Per fornitore */}
-            {result.stats.by_supplier&&(
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {Object.entries(result.stats.by_supplier).map(([n,ct])=>(
-                  <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-                    <strong style={{fontSize:13}}>{n}</strong>
-                    <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Errori CSV se presenti */}
-            {result.stats.errors?.length>0&&(
-              <div style={{marginTop:12,padding:"8px 12px",background:"var(--bl-bg)",borderRadius:8,border:"1px solid var(--bl-border)"}}>
-                {result.stats.errors.map((e,i)=><div key={i} style={{fontSize:12,color:"var(--bl-text)"}}>{e}</div>)}
-              </div>
-            )}
-          </Card>
-
-          {/* Anteprima */}
-          {result.stats.previewData?.length>0&&(
-            <Card>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                <h4 style={{margin:0,fontSize:14}}>👁 Anteprima <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12}}>prime {Math.min(previewRows,result.stats.previewData.length)} di {result.stats.total_products.toLocaleString()}</span></h4>
-                <Btn v="ghost" onClick={()=>setShowPreview(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>{showPreview?"Nascondi":"Mostra"}</Btn>
-              </div>
-              {showPreview&&(
-                <div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead>
-                        <tr style={{borderBottom:"2px solid var(--border)"}}>
-                          {["EAN","SKU","Fascia","Costo €","Vendita €","Netto est.","Fornitore","Qty"].map(h=>(
-                            <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {result.stats.previewData.slice(0,previewRows).map((row,i)=>{
-                          const net=(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2);
-                          return(
-                            <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)"}}>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.costPrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{row.salePrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:parseFloat(net)>0?"#10b981":"#ef4444"}}>{net}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  {result.stats.previewData.length>previewRows&&(
-                    <div style={{textAlign:"center",marginTop:10}}>
-                      <Btn v="ghost" onClick={()=>setPreviewRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20</Btn>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          )}
-        </div>
-      )}
-
-      {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento...</p></Card>}
-    </div>
-  );
-}
-
-// ─── Alerts Panel ─────────────────────────────────────────────────────────────
-function AlertsPanel({onClose}){
-  const[alerts,setAlerts]=useState([]);
-  const[loading,setLoading]=useState(true);
-
-  const fetchAlerts=async()=>{
-    setLoading(true);
-    try{const r=await fetch("/api/alerts");const d=await r.json();setAlerts(d);}
-    catch{}finally{setLoading(false);}
-  };
-
-  useEffect(()=>{fetchAlerts();},[]);
-
-  const action=async(body)=>{
-    await fetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    fetchAlerts();
-  };
-
-  const unread=alerts.filter(a=>!a.read);
-  const read=alerts.filter(a=>a.read);
-
-  const colorMap={error:"#ef4444",warning:"#f59e0b",info:"#6366f1"};
-  const bgMap={error:"var(--bl-bg)",warning:"#2a1a00",info:"var(--tier-bg)"};
-
-  return(
-    <div style={{position:"fixed",top:0,right:0,width:380,height:"100vh",background:"var(--bg-card)",borderLeft:"1px solid var(--border)",zIndex:1000,display:"flex",flexDirection:"column",boxShadow:"-4px 0 20px rgba(0,0,0,0.3)"}}>
-      <div style={{padding:"16px 20px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <h3 style={{margin:0,fontSize:16}}>🔔 Notifiche {unread.length>0&&<span style={{color:"#ef4444",fontSize:13}}>({unread.length} nuove)</span>}</h3>
-        <div style={{display:"flex",gap:8}}>
-          {unread.length>0&&<Btn v="ghost" onClick={()=>action({action:"read-all"})} style={{fontSize:11,padding:"4px 8px"}}>Segna tutte lette</Btn>}
-          {read.length>0&&<Btn v="danger" onClick={()=>action({action:"clear"})} style={{fontSize:11,padding:"4px 8px"}}>Cancella lette</Btn>}
-          <Btn v="ghost" onClick={onClose} style={{fontSize:13,padding:"4px 10px"}}>✕</Btn>
-        </div>
+/* ==========================================================
+   SETTINGS - Numerazione
+   ========================================================== */
+function InvoiceSettingsTab({inv,saveInv}){
+  const[year,sYear]=useState(inv.invoiceYear);
+  const[num,sNum]=useState(inv.lastInvoiceNumber);
+  const sv=()=>{saveInv({...inv,invoiceYear:parseInt(year)||new Date().getFullYear(),lastInvoiceNumber:parseInt(num)||0});alert("Salvato.")};
+  const reset=()=>{if(confirm("Reset numerazione a 0?"))saveInv({...inv,invoiceYear:new Date().getFullYear(),lastInvoiceNumber:0})};
+  const next=nextInvoiceNumber(inv);
+  return<div>
+    <h3 style={{margin:"0 0 14px",color:"var(--text)",fontSize:17}}>Impostazioni fatturazione</h3>
+    <Card>
+      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Numerazione fatture</h4>
+      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 12px"}}>La prossima fattura avrà numero <strong style={{color:"var(--text)"}}>{next.formatted}</strong>.</p>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"0 14px"}}>
+        <Inp label="Anno corrente" type="number" value={year} onChange={e=>sYear(e.target.value)}/>
+        <Inp label="Ultimo numero emesso" type="number" value={num} onChange={e=>sNum(e.target.value)}/>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:16}}>
-        {loading&&<p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento...</p>}
-        {!loading&&alerts.length===0&&<p style={{color:"var(--text-muted)",textAlign:"center",marginTop:40}}>Nessuna notifica. Tutto ok! ✓</p>}
-        {alerts.map(a=>(
-          <div key={a.id} style={{background:bgMap[a.type]||"var(--bg-input)",border:`1px solid ${colorMap[a.type]||"var(--border)"}`,borderRadius:10,padding:"12px 14px",marginBottom:10,opacity:a.read?0.55:1}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13,color:colorMap[a.type]||"var(--text)",marginBottom:4}}>{a.title}</div>
-                <div style={{fontSize:12,color:"var(--text-muted)",lineHeight:1.5}}>{a.message}</div>
-                <div style={{fontSize:10,color:"var(--text-muted)",marginTop:6}}>{new Date(a.created_at).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
-              </div>
-              {!a.read&&<button onClick={()=>action({action:"read",id:a.id})} style={{background:"none",border:"none",color:"var(--text-muted)",cursor:"pointer",fontSize:16,padding:0,flexShrink:0}}>✓</button>}
-            </div>
-          </div>
-        ))}
+      <div style={{display:"flex",gap:8}}>
+        <Btn v="ok" onClick={sv}>Salva</Btn>
+        <Btn v="danger" onClick={reset}>Reset numerazione</Btn>
       </div>
-    </div>
-  );
+    </Card>
+    <Card>
+      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Dati azienda emittente</h4>
+      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 8px"}}>Questi dati sono fissi e impostati nel codice. Per modificarli aggiorna l'oggetto <code style={{background:"var(--bg-input)",padding:"1px 5px",borderRadius:4}}>ISSUER</code>.</p>
+      <div style={{background:"var(--bg-input)",padding:"12px 14px",borderRadius:8,fontSize:13}}>
+        <div><strong>{ISSUER.name}</strong></div>
+        <div style={{color:"var(--text-muted)"}}>{ISSUER.address1}</div>
+        <div style={{color:"var(--text-muted)"}}>{ISSUER.address2}</div>
+        <div style={{color:"var(--text-muted)"}}>{ISSUER.country}</div>
+        <div style={{marginTop:6}}><span style={S.badge("var(--badge-info)")}>VAT: {ISSUER.vat}</span></div>
+      </div>
+    </Card>
+  </div>
 }
+
+/* ==========================================================
+   APP
+   ========================================================== */
 function ThemeToggle({theme,toggle}){
-  return<button onClick={toggle} title={theme==="dark"?"Light mode":"Dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
+  return<button onClick={toggle} title={theme==="dark"?"Passa a light mode":"Passa a dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
     {theme==="dark"?"☀️":"🌙"}
-  </button>;
+  </button>
 }
 
-// ─── App ─────────────────────────────────────────────────────────────────────
 function App(){
+  const[mode,sMode]=useState(()=>localStorage.getItem("gw-mode")||"inventory");
   const[c,sC]=useState(DEFAULT);
-  const[tab,sTab]=useState("auto");
+  const[inv,sInvSt]=useState(DEFAULT_INV);
+  const[tab,sTab]=useState("convert");
+  const[invTab,sInvTab]=useState("generate");
   const[ok,sOk]=useState(false);
-  const[syncStatus,setSyncStatus]=useState("idle");
   const[theme,sTheme]=useState(()=>localStorage.getItem("amz-theme")||"dark");
-  const[alertCount,setAlertCount]=useState(0);
-  const[showAlerts,setShowAlerts]=useState(false);
 
-  useEffect(()=>{document.body.setAttribute("data-theme",theme);},[theme]);
+  useEffect(()=>{document.body.setAttribute("data-theme",theme)},[theme]);
+  useEffect(()=>{sC(load());sInvSt(loadInv());sOk(true)},[]);
 
-  useEffect(()=>{
-    const local=loadLocal();sC(local);sOk(true);setSyncStatus("syncing");
-    loadRemote().then(remote=>{
-      if(remote){const migrated=migrate(remote);sC(migrated);persistLocal(migrated);setSyncStatus("synced");}
-      else setSyncStatus("idle");
-    }).catch(()=>setSyncStatus("error"));
-    // Conta alert non letti
-    fetch("/api/alerts").then(r=>r.json()).then(alerts=>{
-      setAlertCount((alerts||[]).filter(a=>!a.read).length);
-    }).catch(()=>{});
-  },[]);
-
-  const save=cfg=>{
-    sC(cfg);persistLocal(cfg);setSyncStatus("syncing");
-    persistRemote(cfg).then(()=>setSyncStatus("synced")).catch(()=>setSyncStatus("error"));
-  };
-  const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t);};
+  const save=cfg=>{sC(cfg);persist(cfg)};
+  const saveInv=cfg=>{sInvSt(cfg);persistInv(cfg)};
+  const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t)};
+  const setMode=m=>{sMode(m);localStorage.setItem("gw-mode",m)};
 
   if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>Caricamento...</div>;
 
-  const tabs=[
-    {id:"auto",   label:"🤖 Auto"},
-    {id:"convert",label:"⚡ Manuale"},
-    {id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},
-    {id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},
-    {id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length},
-    {id:"history",label:"📊 Storico"},
-  ];
+  const tabs=mode==="inventory"
+    ?[{id:"convert",label:"⚡ Converti"},{id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},{id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},{id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length}]
+    :[{id:"generate",label:"📄 Genera fattura"},{id:"history",label:"📚 Storico",n:(inv.invoices||[]).length},{id:"customers",label:"👥 Clienti",n:inv.customers.length},{id:"markup",label:"💰 Ricarichi",n:inv.markupTiers.length},{id:"settings",label:"⚙️ Impostazioni"}];
 
-  return(
-    <div>
-      {showAlerts&&<AlertsPanel onClose={()=>{setShowAlerts(false);fetch("/api/alerts").then(r=>r.json()).then(d=>setAlertCount((d||[]).filter(a=>!a.read).length)).catch(()=>{});}}/>}
-      <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
-        <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
-            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v5.0</span></h1>
-            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Auto FTP • Multi-fornitore • Fasce rincaro • Storico • Alert</p>
+  const curTab=mode==="inventory"?tab:invTab;
+  const setCurTab=mode==="inventory"?sTab:sInvTab;
+
+  return<div>
+    <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <div>
+          <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}>
+            <span style={{color:"#6366f1"}}>▸</span> {mode==="inventory"?"Amazon Inventory Converter":"Global Way Invoicing"}
+            <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400,marginLeft:8}}>v4</span>
+          </h1>
+          <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>
+            {mode==="inventory"
+              ?"Multi-fornitore • Merge per EAN • Prezzo più basso vince • Stock dal catalogo"
+              :"Parsing fatture passive Deldo • Fattura attiva intracomunitaria • Ricarichi per fascia"}
+          </p>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <div className="modeswitch">
+            <button className={mode==="inventory"?"act":""} onClick={()=>setMode("inventory")}>📦 Inventory</button>
+            <button className={mode==="invoicing"?"act":""} onClick={()=>setMode("invoicing")}>🧾 Fatturazione</button>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:11,color:{idle:"var(--text-muted)",syncing:"#f59e0b",synced:"#10b981",error:"#ef4444"}[syncStatus]}}>
-              {syncStatus==="syncing"&&"↑ sync..."}
-              {syncStatus==="synced"&&"✓ sync"}
-              {syncStatus==="error"&&"⚠ offline"}
-            </span>
-            <AlertBell onClick={()=>setShowAlerts(p=>!p)} count={alertCount}/>
-            <ThemeToggle theme={theme} toggle={toggleTheme}/>
-          </div>
+          <ThemeToggle theme={theme} toggle={toggleTheme}/>
         </div>
       </div>
-      <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
-        <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
-          {tabs.map(t=>(
-            <button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
-              {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
-            </button>
-          ))}
-        </div>
+    </div>
+    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
+        {tabs.map(t=><button key={t.id} onClick={()=>setCurTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:curTab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:curTab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap",fontFamily:"inherit"}}>
+          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
+        </button>)}
       </div>
-      <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
-        {tab==="auto"&&<AutoTab/>}
+    </div>
+    <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
+      {mode==="inventory"&&<>
         {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
         {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
         {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}
         {tab==="convert"&&<ConvertTab config={c}/>}
-        {tab==="history"&&<HistoryTab/>}
-      </div>
+      </>}
+      {mode==="invoicing"&&<>
+        {invTab==="generate"&&<InvoiceGenTab inv={inv} saveInv={saveInv}/>}
+        {invTab==="history"&&<HistoryTab inv={inv} saveInv={saveInv}/>}
+        {invTab==="customers"&&<CustomersTab inv={inv} saveInv={saveInv}/>}
+        {invTab==="markup"&&<MarkupTiersTab inv={inv} saveInv={saveInv}/>}
+        {invTab==="settings"&&<InvoiceSettingsTab inv={inv} saveInv={saveInv}/>}
+      </>}
     </div>
-  );
+  </div>
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
