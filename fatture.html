@@ -124,10 +124,12 @@ function parseDeldo(text){
   const skipKeywords=["eilandtoeslag","dpd","spedizione","trasporto","passenger car tyres","ecotassa","smaltimento"];
 
   for(const block of blocks){
-    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(\d+)\s*-\s*(\d+)/);
+    // Il primo campo dopo "Ref. :" può essere un numero o un nome (es. "BROMURI Gianni",
+    // "Bressan galliano", "Elia"). Il secondo è sempre numerico (telefono/ID cliente).
+    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(.+?)\s*-\s*(\d+)\s*(?:\n|$)/);
     if(!ord)continue;
     const order={
-      orderId1:ord[1],orderId2:ord[2],ref1:ord[3],ref2:ord[4],
+      orderId1:ord[1],orderId2:ord[2],ref1:ord[3].trim(),ref2:ord[4],
       client:{name:"",street:"",city:"",country:"Italy"},
       items:[]
     };
@@ -136,6 +138,8 @@ function parseDeldo(text){
     const addrM=block.match(/indirizzo di\s+([\s\S]+)/i);
     if(addrM){
       const addrBlock=addrM[1];
+      // paesi noti da estrarre come terminatori/marker (case-insensitive)
+      const countryRe=/^(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)$/i;
       const lines=[];
       for(const raw of addrBlock.split("\n")){
         const s=raw.trim();
@@ -144,41 +148,65 @@ function parseDeldo(text){
         if(/^\d+\s+DPD/i.test(s))break;
         lines.push(s);
       }
-      const nameParts=[];let capCity="";let street="";
-      // Il CAP italiano deve essere preceduto da spazio/trattino (non da altra cifra)
-      // così non matcha porzioni di telefono lunghi.
+      const nameParts=[];let capCity="";let street="";let country="Italy";
       const capRe=/(?:^|[\s\-])(\d{5}\s+\S.*)$/;
+      // Riconoscimento via: italiano + tedesco + francese
+      const streetRe=/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada|str(?:aße|aBe|asse)|rue|avenue|allee|boulevard|platz|weg|gasse|josefstrabe|.*stra[ßB]e|.*strasse)/i;
       for(const ln of lines){
+        // 1) riga "Italy"/"Germany"/etc. da sola
+        if(countryRe.test(ln)){country=ln;continue}
+        // 2) riga con NOME + CAP CITTÀ + (Paese) sulla stessa linea (layout 2 col)
+        // Esempio: "indirizzo di BROMURI Gianni -3401686821 - 48125 Frz.Mensa Matellica-RA"
+        // Esempio: "Harun Topaloglu- 44536 Lunen"
         const capInLine=ln.match(capRe);
         if(capInLine && !/^\d{5}\s/.test(ln)){
           const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
           const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
-          const right=capInLine[1].trim();
+          let right=capInLine[1].trim();
+          // se la parte "right" contiene il nome di un paese in coda, separalo
+          const rcm=right.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
+          if(rcm){country=rcm[1];right=right.slice(0,rcm.index).trim()}
           if(left)nameParts.push(left);
           if(!capCity)capCity=right;
           continue;
         }
-        if(ln==="Italy")continue;
-        if(/^\d{5}\s/.test(ln)){if(!capCity)capCity=ln;continue}
+        // 3) riga "CAP città" da sola
+        if(/^\d{5}\s/.test(ln)){
+          let v=ln;
+          const rcm=v.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
+          if(rcm){country=rcm[1];v=v.slice(0,rcm.index).trim()}
+          if(!capCity)capCity=v;
+          continue;
+        }
+        // 4) telefono solo: skip
         if(/^\d{7,}-?$/.test(ln))continue;
         if(/^[\d\s\-]+$/.test(ln) && /\d{7,}/.test(ln))continue;
-        if(/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada)/i.test(ln)){
+        // 5) via (it/de/fr)
+        if(streetRe.test(ln)){
           if(!street)street=ln;
           continue;
         }
-        const cleaned=ln.replace(/\s+Italy\s*$/,"").replace(/^[-\s,]+|[-\s,]+$/g,"");
+        // 6) tutto il resto = nome
+        const cleaned=ln.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,(m,g)=>{country=g;return""}).replace(/^[-\s,]+|[-\s,]+$/g,"");
         if(cleaned)nameParts.push(cleaned);
       }
-      capCity=capCity.replace(/\s+Italy\s*$/,"").trim();
+      capCity=capCity.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,"").trim();
       let fullName=nameParts.join(" ");
       fullName=fullName.replace(/-?\s*\d{7,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
-      order.client={name:fullName,street,city:capCity,country:"Italy"};
+      order.client={name:fullName,street,city:capCity,country};
     }
 
     // RIGHE ARTICOLI
     const cleanLines=[];
-    const afterIt=block.split(/\bItaly\b/);
-    const itemsSection=afterIt.length>1?afterIt.slice(1).join(" Italy "):block;
+    // Taglia la sezione articoli sull'ultimo paese trovato nel blocco indirizzo.
+    // Supporta i paesi più comuni (italiano per backcompat + tedesco/altri EU).
+    const countrySplitRe=/\b(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\b/g;
+    let lastCountryIdx=-1;let lastCountryLen=0;
+    let cm;
+    while((cm=countrySplitRe.exec(block))!==null){
+      lastCountryIdx=cm.index;lastCountryLen=cm[0].length;
+    }
+    const itemsSection=lastCountryIdx>=0?block.slice(lastCountryIdx+lastCountryLen):block;
     for(const raw of itemsSection.split("\n")){
       const s=raw.trim();
       if(!s)continue;
