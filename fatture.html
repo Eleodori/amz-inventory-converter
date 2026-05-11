@@ -508,7 +508,25 @@ function GenerateTab({inv,saveInv}){
         noteLines.push(`Source invoices ref: ${supInvs.map(s=>s.number).join(", ")}`);
       }
     }
-    noteLines.forEach(l=>{doc.text(l,15,endY);endY+=4.5});
+    // Pagina A4 = 210mm; margini 15mm per lato → larghezza utile 180mm.
+    // splitTextToSize spezza ogni stringa in più righe se eccede la larghezza.
+    const maxWidth=pw-30;
+    const pageH=doc.internal.pageSize.getHeight();
+    const lineH=4.5;
+    const footerReserve=18; // spazio per footer
+    for(const l of noteLines){
+      if(l===""){endY+=lineH;continue}
+      const wrapped=doc.splitTextToSize(l,maxWidth);
+      for(const w of wrapped){
+        if(endY+lineH>pageH-footerReserve){
+          doc.addPage();
+          endY=20;
+          doc.setFont("helvetica","italic");doc.setFontSize(9);doc.setTextColor(80);
+        }
+        doc.text(w,15,endY);
+        endY+=lineH;
+      }
+    }
 
     // FOOTER
     doc.setTextColor(120);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
