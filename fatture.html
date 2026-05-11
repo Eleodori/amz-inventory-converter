@@ -273,10 +273,9 @@ function Btn({children,onClick,v="pri",style,disabled,type}){
    TAB: Genera fattura
    ========================================================== */
 function GenerateTab({inv,saveInv}){
-  const[file,sFile]=useState(null);
-  const[parsing,sParsing]=useState(false);
-  const[parsed,sParsed]=useState(null);
-  const[parseErr,sParseErr]=useState(null);
+  // Lista di file caricati, ognuno con stato: {id, name, status:'parsing|ok|error', result, error}
+  const[files,sFiles]=useState([]);
+  const[isDragging,sIsDragging]=useState(false);
   const[customerId,sCustomerId]=useState(inv.customers[0]?.id||"");
   const[invDate,sInvDate]=useState(todayIso());
   const[invNumOverride,sInvNumOverride]=useState("");
@@ -285,50 +284,104 @@ function GenerateTab({inv,saveInv}){
   const next=useMemo(()=>nextInvoiceNumber(inv),[inv.lastInvoiceNumber,inv.invoiceYear]);
   const effectiveInvNum=invNumOverride.trim()||next.formatted;
 
-  const handleFile=async(f)=>{
-    if(!f)return;
-    sFile(f);sParsed(null);sParseErr(null);sParsing(true);sGen(false);
+  // processa un singolo file: estrae testo + parsa
+  const processOne=async(f,id)=>{
     try{
       const txt=await extractTextFromPDF(f);
       const result=parseDeldo(txt);
-      if(!result.orders.length){sParseErr("Nessun ordine trovato nel PDF. Verifica che sia una fattura Deldo valida.");}
-      else sParsed(result);
-    }catch(e){sParseErr("Errore nel parsing: "+e.message);console.error(e);}
-    finally{sParsing(false);}
+      if(!result.orders.length){
+        return {id,name:f.name,status:"error",error:"Nessun pneumatico estratto. Verifica che sia una fattura Deldo valida."};
+      }
+      const qty=result.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.quantity,0),0);
+      const val=result.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.total,0),0);
+      return {id,name:f.name,status:"ok",result,qty,val};
+    }catch(e){
+      console.error(e);
+      return {id,name:f.name,status:"error",error:"Errore nel parsing: "+e.message};
+    }
   };
 
+  // aggiunge una lista di File alla coda di upload
+  const addFiles=async(fileList)=>{
+    sGen(false);
+    const news=Array.from(fileList).filter(f=>f.name.toLowerCase().endsWith(".pdf"));
+    if(!news.length)return;
+    // crea entries placeholder con status "parsing"
+    const placeholders=news.map((f,i)=>({
+      id:Date.now()+"_"+i+"_"+Math.random().toString(36).slice(2,6),
+      name:f.name,status:"parsing"
+    }));
+    sFiles(prev=>[...prev,...placeholders]);
+    // processa in parallelo
+    const results=await Promise.all(news.map((f,i)=>processOne(f,placeholders[i].id)));
+    sFiles(prev=>{
+      const map=new Map(results.map(r=>[r.id,r]));
+      return prev.map(f=>map.has(f.id)?map.get(f.id):f);
+    });
+  };
+
+  const removeFile=(id)=>{
+    sFiles(prev=>prev.filter(f=>f.id!==id));
+    sGen(false);
+  };
+  const clearAll=()=>{sFiles([]);sGen(false)};
+
+  const onDrop=(e)=>{
+    e.preventDefault();sIsDragging(false);
+    if(e.dataTransfer?.files?.length)addFiles(e.dataTransfer.files);
+  };
+  const onDragOver=(e)=>{e.preventDefault();sIsDragging(true)};
+  const onDragLeave=(e)=>{e.preventDefault();sIsDragging(false)};
+
+  // anti-state for blocking generation: TRUE se ci sono errori o parsing in corso
+  const hasParsing=files.some(f=>f.status==="parsing");
+  const hasErrors=files.some(f=>f.status==="error");
+  const okFiles=files.filter(f=>f.status==="ok");
+
   const computed=useMemo(()=>{
-    if(!parsed)return null;
+    if(!okFiles.length)return null;
     const lines=[];
     let totalNet=0,totalGross=0,totalQty=0;
-    for(const ord of parsed.orders){
-      for(const it of ord.items){
-        const unitMarked=applyMarkup(it.unitPrice,inv.markupTiers);
-        const lineTotal=unitMarked*it.quantity;
-        const cost=it.unitPrice*it.quantity;
-        totalNet+=cost;totalGross+=lineTotal;totalQty+=it.quantity;
-        lines.push({
-          orderRef:ord.ref2,
-          clientName:ord.client.name,
-          clientAddr:[ord.client.street,ord.client.city,ord.client.country].filter(Boolean).join(", "),
-          quantity:it.quantity,
-          description:it.description,
-          unitCost:it.unitPrice,
-          unitPrice:unitMarked,
-          lineTotal,
-          cost
-        });
+    for(const f of okFiles){
+      for(const ord of f.result.orders){
+        for(const it of ord.items){
+          const unitMarked=applyMarkup(it.unitPrice,inv.markupTiers);
+          const lineTotal=unitMarked*it.quantity;
+          const cost=it.unitPrice*it.quantity;
+          totalNet+=cost;totalGross+=lineTotal;totalQty+=it.quantity;
+          lines.push({
+            orderRef:ord.ref2,
+            sourceInvoice:f.result.meta?.supplierInvNum||null,
+            clientName:ord.client.name,
+            clientAddr:[ord.client.street,ord.client.city,ord.client.country].filter(Boolean).join(", "),
+            quantity:it.quantity,
+            description:it.description,
+            unitCost:it.unitPrice,
+            unitPrice:unitMarked,
+            lineTotal,
+            cost
+          });
+        }
       }
     }
-    return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet};
-  },[parsed,inv.markupTiers]);
+    // raccoglie i metadati delle fatture passive sorgente (deduplicati, ordinati)
+    const supplierInvoicesMap=new Map();
+    for(const f of okFiles){
+      const num=f.result.meta?.supplierInvNum;
+      if(num && !supplierInvoicesMap.has(num)){
+        supplierInvoicesMap.set(num,{number:num,date:f.result.meta?.supplierInvDate||null});
+      }
+    }
+    const supplierInvoices=[...supplierInvoicesMap.values()].sort((a,b)=>a.number.localeCompare(b.number));
+    return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet,supplierInvoices};
+  },[okFiles,inv.markupTiers]);
 
   const customer=inv.customers.find(c=>String(c.id)===String(customerId));
 
   const generatePDF=()=>{
     if(!computed||!customer)return;
 
-    // controllo duplicati nello storico
+    // controllo duplicati nello storico (messaggio resta in italiano: è UI per l'utente)
     const existing=(inv.invoices||[]).find(x=>x.number===effectiveInvNum);
     if(existing){
       const ok=confirm(`Esiste già una fattura con numero ${effectiveInvNum} (emessa il ${isoToIt(existing.date)} a ${existing.customerName}, totale € ${fmtEur(existing.total)}).\n\nProcedere comunque?\nLa nuova fattura sostituirà quella nello storico.`);
@@ -339,9 +392,9 @@ function GenerateTab({inv,saveInv}){
     const doc=new jsPDF({unit:"mm",format:"a4"});
     const pw=doc.internal.pageSize.getWidth();
 
-    // HEADER
+    // HEADER — issuer + INVOICE title
     doc.setFont("helvetica","bold");doc.setFontSize(20);
-    doc.text("FATTURA / INVOICE",pw-15,18,{align:"right"});
+    doc.text("INVOICE",pw-15,18,{align:"right"});
     doc.setFontSize(11);doc.setFont("helvetica","bold");
     doc.text(ISSUER.name,15,18);
     doc.setFont("helvetica","normal");doc.setFontSize(9);
@@ -352,18 +405,18 @@ function GenerateTab({inv,saveInv}){
     doc.setDrawColor(180);doc.setLineWidth(.3);
     doc.line(15,42,pw-15,42);
     doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
-    doc.text("NUMERO FATTURA",15,48);
-    doc.text("DATA FATTURA",70,48);
-    doc.text("PARTITA IVA EMITTENTE",125,48);
+    doc.text("INVOICE NUMBER",15,48);
+    doc.text("INVOICE DATE",70,48);
+    doc.text("ISSUER VAT NUMBER",125,48);
     doc.setTextColor(0);doc.setFont("helvetica","normal");doc.setFontSize(11);
     doc.text(effectiveInvNum,15,53);
     doc.text(isoToIt(invDate),70,53);
     doc.text(ISSUER.vat,125,53);
     doc.line(15,58,pw-15,58);
 
-    // CLIENTE
+    // BILL TO
     doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
-    doc.text("FATTURATO A:",15,65);
+    doc.text("BILL TO:",15,65);
     doc.setTextColor(0);doc.setFont("helvetica","bold");doc.setFontSize(11);
     doc.text(customer.name,15,71);
     doc.setFont("helvetica","normal");doc.setFontSize(10);
@@ -372,9 +425,9 @@ function GenerateTab({inv,saveInv}){
     if(customer.zip||customer.city){doc.text(`${customer.zip||""} ${customer.city||""}`.trim(),15,yy);yy+=4.5}
     if(customer.country){doc.text(customer.country,15,yy);yy+=4.5}
     doc.setFont("helvetica","bold");
-    doc.text("P.IVA: "+customer.vat,15,yy);
+    doc.text("VAT: "+customer.vat,15,yy);
 
-    // TABELLA
+    // TABLE
     const body=computed.lines.map(l=>[
       String(l.quantity),
       l.description,
@@ -384,7 +437,7 @@ function GenerateTab({inv,saveInv}){
     ]);
     doc.autoTable({
       startY:Math.max(yy+8,100),
-      head:[["Q.tà","Descrizione pneumatico","Indirizzo di consegna","Prezzo unit. €","Totale €"]],
+      head:[["Qty","Tyre description","Delivery address","Unit price €","Total €"]],
       body,
       theme:"grid",
       styles:{font:"helvetica",fontSize:8.5,cellPadding:2.5,lineColor:[200,200,200]},
@@ -401,25 +454,31 @@ function GenerateTab({inv,saveInv}){
     let endY=doc.lastAutoTable.finalY+5;
     if(endY>250){doc.addPage();endY=20}
 
-    // TOTALI
+    // TOTALS
     doc.setDrawColor(180);
     doc.line(120,endY,pw-15,endY);endY+=5;
     doc.setFontSize(10);doc.setFont("helvetica","normal");
-    doc.text("Imponibile:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=5;
-    doc.text("IVA (esente):",120,endY);doc.text("€ 0,00",pw-15,endY,{align:"right"});endY+=5;
+    doc.text("Net amount:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=5;
+    doc.text("VAT (exempt):",120,endY);doc.text("€ 0,00",pw-15,endY,{align:"right"});endY+=5;
     doc.setFont("helvetica","bold");doc.setFontSize(12);
-    doc.text("TOTALE:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=8;
+    doc.text("TOTAL:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=8;
 
-    // NOTE
+    // NOTES (English only)
     doc.setFont("helvetica","italic");doc.setFontSize(9);doc.setTextColor(80);
     const noteLines=[
-      "Operazione non imponibile IVA - Cessione intracomunitaria di beni",
-      "ex art. 138 Direttiva 2006/112/CE - Reverse charge in capo al cessionario.",
-      "VAT exempt - Intra-Community supply of goods (Art. 138 EU VAT Directive 2006/112/EC)."
+      "VAT exempt - Intra-Community supply of goods",
+      "(Art. 138 EU VAT Directive 2006/112/EC). Reverse charge applies to the recipient."
     ];
-    if(parsed?.meta?.supplierInvNum){
+    // Reference to source invoices (list all)
+    const supInvs=computed.supplierInvoices||[];
+    if(supInvs.length){
       noteLines.push("");
-      noteLines.push(`Riferimento fornitura: fattura ${parsed.meta.supplierInvNum} del ${parsed.meta.supplierInvDate}`);
+      if(supInvs.length===1){
+        const s=supInvs[0];
+        noteLines.push(`Source invoice ref: ${s.number}${s.date?" of "+s.date:""}`);
+      }else{
+        noteLines.push(`Source invoices ref: ${supInvs.map(s=>s.number).join(", ")}`);
+      }
     }
     noteLines.forEach(l=>{doc.text(l,15,endY);endY+=4.5});
 
@@ -428,13 +487,16 @@ function GenerateTab({inv,saveInv}){
     const fy=doc.internal.pageSize.getHeight()-12;
     doc.text(`${ISSUER.name} • ${ISSUER.address1}, ${ISSUER.address2}, ${ISSUER.country} • VAT ${ISSUER.vat}`,pw/2,fy,{align:"center"});
 
-    // Download immediato
-    const fname=`Fattura_${effectiveInvNum.replace(/[\/\\]/g,"-")}_${customer.name.replace(/[^a-z0-9]/gi,"_").slice(0,20)}.pdf`;
+    // Download
+    const fname=`Invoice_${effectiveInvNum.replace(/[\/\\]/g,"-")}_${customer.name.replace(/[^a-z0-9]/gi,"_").slice(0,20)}.pdf`;
     doc.save(fname);
 
-    // Salva nello storico (PDF in base64 + metadati)
+    // Salva nello storico
     const pdfDataUri=doc.output("datauristring");
     const pdfBase64=pdfDataUri.split(",")[1];
+    // Per retro-compatibilità con lo storico vecchio: salviamo SIA supplierInvNum (primo)
+    // SIA supplierInvoices (array completo). Lo storico mostrerà la lista se presente.
+    const firstSup=supInvs[0]||null;
     const record={
       id:Date.now()+"_"+Math.random().toString(36).slice(2,8),
       number:effectiveInvNum,
@@ -448,11 +510,14 @@ function GenerateTab({inv,saveInv}){
       margin:computed.margin,
       qty:computed.totalQty,
       lineCount:computed.lines.length,
-      supplierInvNum:parsed?.meta?.supplierInvNum||null,
-      supplierInvDate:parsed?.meta?.supplierInvDate||null,
+      supplierInvNum:firstSup?firstSup.number:null,
+      supplierInvDate:firstSup?firstSup.date:null,
+      supplierInvoices:supInvs,
+      sourceFileCount:okFiles.length,
       lines:computed.lines.map(l=>({
         quantity:l.quantity,description:l.description,
         clientName:l.clientName,clientAddr:l.clientAddr,
+        sourceInvoice:l.sourceInvoice||null,
         unitCost:l.unitCost,unitPrice:l.unitPrice,lineTotal:l.lineTotal
       })),
       pdfBase64,
@@ -481,35 +546,70 @@ function GenerateTab({inv,saveInv}){
 
   return<div>
     <Card>
-      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fattura passiva (PDF Deldo)</h3>
-      {!file&&<label style={{display:"block",padding:"30px",borderRadius:10,background:"var(--bg-input)",border:"2px dashed var(--border-input)",textAlign:"center",cursor:"pointer"}}>
-        <div style={{fontSize:32,marginBottom:6}}>📄</div>
-        <div style={{color:"var(--text)",fontWeight:600}}>Clicca per caricare il PDF della fattura passiva</div>
-        <div style={{color:"var(--text-muted)",fontSize:12,marginTop:4}}>Formato Deldo Autobanden NV (.pdf)</div>
-        <input type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
-      </label>}
-      {file&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"var(--bg-input)",borderRadius:8,border:"1px solid var(--border-input)"}}>
-        <div>
-          <strong style={{color:"var(--text)"}}>📄 {file.name}</strong>
-          {parsing&&<div style={{color:"#f59e0b",fontSize:12,marginTop:4}}>⏳ Estrazione in corso...</div>}
-          {parsed&&<div style={{color:"#10b981",fontSize:12,marginTop:4}}>✓ {parsed.orders.length} ordini, {parsed.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.quantity,0),0)} pezzi</div>}
-          {parseErr&&<div style={{color:"#ef4444",fontSize:12,marginTop:4}}>❌ {parseErr}</div>}
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fatture passive (PDF Deldo)</h3>
+      <p style={{margin:"0 0 12px",color:"var(--text-muted)",fontSize:13}}>Puoi caricare uno o più PDF. Il sistema unirà tutte le righe in <strong>una sola fattura attiva</strong>.</p>
+
+      <label
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        style={{
+          display:"block",padding:"24px",borderRadius:10,
+          background:isDragging?"var(--bg-card)":"var(--bg-input)",
+          border:isDragging?"2px dashed #6366f1":"2px dashed var(--border-input)",
+          textAlign:"center",cursor:"pointer",transition:"all .15s"
+        }}>
+        <div style={{fontSize:32,marginBottom:6}}>{isDragging?"📥":"📄"}</div>
+        <div style={{color:"var(--text)",fontWeight:600}}>
+          {isDragging?"Rilascia i PDF qui":"Trascina qui i PDF o clicca per selezionarli"}
         </div>
-        <div style={{display:"flex",gap:6}}>
-          <label style={{padding:"6px 12px",borderRadius:6,background:"var(--border)",color:"var(--text)",fontWeight:600,fontSize:12,cursor:"pointer"}}>
-            Sostituisci<input type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
-          </label>
-          <Btn v="danger" onClick={()=>{sFile(null);sParsed(null);sParseErr(null);sGen(false)}} style={{fontSize:11}}>✕</Btn>
+        <div style={{color:"var(--text-muted)",fontSize:12,marginTop:4}}>Selezione multipla supportata • Formato Deldo Autobanden NV (.pdf)</div>
+        <input type="file" accept=".pdf" multiple style={{display:"none"}} onChange={e=>{if(e.target.files?.length)addFiles(e.target.files);e.target.value=""}}/>
+      </label>
+
+      {files.length>0&&<div style={{marginTop:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <span style={{fontSize:12,color:"var(--text-label)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>
+            File caricati ({files.length})
+            {okFiles.length>0&&<span style={{marginLeft:8,color:"#10b981",fontSize:11}}>✓ {okFiles.length} OK</span>}
+            {hasErrors&&<span style={{marginLeft:8,color:"#ef4444",fontSize:11}}>❌ {files.filter(f=>f.status==="error").length} errore</span>}
+            {hasParsing&&<span style={{marginLeft:8,color:"#f59e0b",fontSize:11}}>⏳ {files.filter(f=>f.status==="parsing").length} in lavorazione</span>}
+          </span>
+          <Btn v="ghost" onClick={clearAll} style={{fontSize:11,padding:"4px 10px"}}>Svuota lista</Btn>
         </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {files.map(f=><div key={f.id} style={{
+            display:"flex",alignItems:"center",justifyContent:"space-between",
+            padding:"10px 14px",background:"var(--bg-input)",borderRadius:8,
+            border:"1px solid "+(f.status==="error"?"#ef4444":f.status==="ok"?"var(--border-input)":"var(--border-input)")
+          }}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:14}}>{f.status==="parsing"?"⏳":f.status==="error"?"❌":"📄"}</span>
+                <strong style={{color:"var(--text)",fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</strong>
+                {f.status==="ok"&&f.result?.meta?.supplierInvNum&&<span style={S.badge("var(--badge-info)")}>Inv {f.result.meta.supplierInvNum}</span>}
+              </div>
+              {f.status==="parsing"&&<div style={{color:"#f59e0b",fontSize:11,marginTop:3}}>Estrazione in corso...</div>}
+              {f.status==="ok"&&<div style={{color:"#10b981",fontSize:11,marginTop:3}}>✓ {f.result.orders.length} ordini, {f.qty} pezzi, € {fmtEur(f.val)}</div>}
+              {f.status==="error"&&<div style={{color:"#ef4444",fontSize:11,marginTop:3}}>{f.error}</div>}
+            </div>
+            <Btn v="danger" onClick={()=>removeFile(f.id)} style={{fontSize:11,padding:"4px 10px",marginLeft:10}}>✕</Btn>
+          </div>)}
+        </div>
+        {hasErrors&&<div style={{marginTop:10,padding:"10px 14px",background:"var(--bl-bg)",border:"1px solid var(--bl-border)",borderRadius:8,color:"var(--bl-text)",fontSize:12}}>
+          ⚠️ Risolvi gli errori (rimuovi i file problematici) prima di procedere con la generazione.
+        </div>}
       </div>}
     </Card>
 
-    {parsed&&computed&&<Card>
-      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>2. Anteprima righe estratte</h3>
+    {computed&&!hasParsing&&!hasErrors&&<Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>2. Anteprima righe estratte
+        {okFiles.length>1&&<span style={{fontWeight:400,fontSize:13,color:"var(--text-muted)",marginLeft:8}}>(da {okFiles.length} fatture passive)</span>}
+      </h3>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,marginBottom:12}}>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
-          <div style={{fontSize:11,color:"var(--text-label)"}}>Ordini</div>
-          <div style={{fontSize:18,fontWeight:700}}>{parsed.orders.length}</div>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Righe</div>
+          <div style={{fontSize:18,fontWeight:700}}>{computed.lines.length}</div>
         </div>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Pezzi</div>
@@ -535,6 +635,7 @@ function GenerateTab({inv,saveInv}){
               <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
               <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
               <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
+              {okFiles.length>1&&<th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Fattura</th>}
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Acquisto</th>
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Vendita</th>
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
@@ -545,6 +646,7 @@ function GenerateTab({inv,saveInv}){
               <td style={{padding:8}}>{l.quantity}</td>
               <td style={{padding:8}}>{l.description}</td>
               <td style={{padding:8,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
+              {okFiles.length>1&&<td style={{padding:8,fontSize:11,color:"var(--text-muted)"}}>{l.sourceInvoice||"—"}</td>}
               <td style={{padding:8,textAlign:"right",color:"var(--text-muted)"}}>€ {fmtEur(l.unitCost)}</td>
               <td style={{padding:8,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
               <td style={{padding:8,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
@@ -554,7 +656,7 @@ function GenerateTab({inv,saveInv}){
       </div>
     </Card>}
 
-    {parsed&&<Card>
+    {computed&&!hasParsing&&!hasErrors&&<Card>
       <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>3. Dati fattura attiva</h3>
       {inv.customers.length===0?
         <p style={{color:"#f59e0b",margin:0}}>⚠️ Nessun cliente configurato. Aggiungilo nella tab "Clienti".</p>
@@ -566,6 +668,7 @@ function GenerateTab({inv,saveInv}){
           </div>
           <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0 12px"}}>
             Numero progressivo automatico: <strong>{next.formatted}</strong>. Se lasci vuoto il campo viene usato questo, e dopo l'emissione il contatore avanza automaticamente.
+            {computed.supplierInvoices.length>1&&<><br/>Riferimento nelle note PDF: <strong>{computed.supplierInvoices.map(s=>s.number).join(", ")}</strong></>}
           </p>
           <div style={{textAlign:"center"}}>
             <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>📄 Genera fattura PDF</Btn>
@@ -730,9 +833,17 @@ function HistoryTab({inv,saveInv}){
                 </div>
               </div>
               {isOpen&&<div style={{borderTop:"1px solid var(--border)",padding:"14px 18px",background:"var(--bg-input)"}}>
-                {rec.supplierInvNum&&<div style={{fontSize:12,color:"var(--text-muted)",marginBottom:10}}>
-                  Riferimento fornitura: fattura <strong>{rec.supplierInvNum}</strong> del {rec.supplierInvDate}
-                </div>}
+                {(()=>{
+                  const sups=rec.supplierInvoices&&rec.supplierInvoices.length?rec.supplierInvoices:
+                    (rec.supplierInvNum?[{number:rec.supplierInvNum,date:rec.supplierInvDate}]:[]);
+                  if(!sups.length)return null;
+                  if(sups.length===1)return<div style={{fontSize:12,color:"var(--text-muted)",marginBottom:10}}>
+                    Riferimento fornitura: fattura <strong>{sups[0].number}</strong>{sups[0].date?" del "+sups[0].date:""}
+                  </div>;
+                  return<div style={{fontSize:12,color:"var(--text-muted)",marginBottom:10}}>
+                    Generata da <strong>{sups.length} fatture passive</strong>: {sups.map(s=>s.number).join(", ")}
+                  </div>;
+                })()}
                 <div style={{maxHeight:240,overflowY:"auto",border:"1px solid var(--border)",borderRadius:6}}>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                     <thead style={{background:"var(--bg-card)",position:"sticky",top:0}}>
@@ -740,6 +851,7 @@ function HistoryTab({inv,saveInv}){
                         <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
                         <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
                         <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
+                        {(rec.supplierInvoices&&rec.supplierInvoices.length>1)&&<th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Fattura</th>}
                         <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Prezzo</th>
                         <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
                       </tr>
@@ -749,6 +861,7 @@ function HistoryTab({inv,saveInv}){
                         <td style={{padding:6}}>{l.quantity}</td>
                         <td style={{padding:6}}>{l.description}</td>
                         <td style={{padding:6,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
+                        {(rec.supplierInvoices&&rec.supplierInvoices.length>1)&&<td style={{padding:6,fontSize:11,color:"var(--text-muted)"}}>{l.sourceInvoice||"—"}</td>}
                         <td style={{padding:6,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
                         <td style={{padding:6,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
                       </tr>)}
