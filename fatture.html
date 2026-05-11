@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Global Way - Fatturazione</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;min-height:100vh;transition:background .2s,color .2s}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg-card)}::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:3px}
+body[data-theme="dark"]{
+--bg:#0f0f1e;--bg-card:#1a1a2e;--bg-input:#0f0f1e;--bg-stat:#0f0f1e;
+--bg-header-start:#1a1a3e;--bg-header-end:#0f0f1e;
+--border:#2a2a4a;--border-input:#3a3a5a;
+--text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
+--tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
+--ghost-border:#3a3a5a;--ghost-text:#8888cc;
+--badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;--badge-warn:#78350f;
+--bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
+--accent-form:#a5b4fc;
+}
+body[data-theme="light"]{
+--bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
+--bg-header-start:#e8e8f4;--bg-header-end:#f4f4f8;
+--border:#dcdce6;--border-input:#c8c8d6;
+--text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
+--tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
+--ghost-border:#c8c8d6;--ghost-text:#4f46e5;
+--badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;--badge-warn:#fed7aa;
+--bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
+--accent-form:#4f46e5;
+}
+body{background:var(--bg);color:var(--text)}
+@media(min-width:1024px){.app-content{max-width:960px!important}}
+@media(min-width:1280px){.app-content{max-width:1100px!important}}
+@media(min-width:1536px){.app-content{max-width:1300px!important}}
+@media(max-width:600px){.app-header{padding:14px 16px!important}.app-tabs{padding:0 12px!important}.app-content{padding:16px!important}}
+.navlink{color:var(--ghost-text);text-decoration:none;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--ghost-border);transition:all .15s}
+.navlink:hover{background:var(--bg-input)}
+</style>
+</head>
+<body>
+<script>document.body.setAttribute("data-theme",localStorage.getItem("amz-theme")||"dark")</script>
+<div id="root"></div>
+
+<script>
+if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"}
+</script>
+
+<script type="text/babel">
+const {useState,useEffect,useMemo}=React;
+
+/* ==========================================================
+   STORAGE — chiave dedicata, separata dall'inventory converter
+   ========================================================== */
+const INV_KEY="gw-invoicing-v1";
+const DEFAULT_INV={
+  customers:[],
+  markupTiers:[
+    {id:1,min:0,max:50,markupPct:25,flatFee:0},
+    {id:2,min:50,max:100,markupPct:20,flatFee:0},
+    {id:3,min:100,max:999999,markupPct:15,flatFee:0}
+  ],
+  lastInvoiceNumber:0,
+  invoiceYear:new Date().getFullYear(),
+  invoices:[]
+};
+
+// Azienda emittente — fissa
+const ISSUER={
+  name:"Global Way LT MB",
+  address1:"V. Nageviciaus g. 3",
+  address2:"08237 Vilnius",
+  country:"Lithuania",
+  vat:"LT100019693812"
+};
+
+function loadInv(){try{const v=JSON.parse(localStorage.getItem(INV_KEY));return v?{...DEFAULT_INV,...v}:DEFAULT_INV}catch{return DEFAULT_INV}}
+function persistInv(c){localStorage.setItem(INV_KEY,JSON.stringify(c))}
+
+/* ==========================================================
+   PARSER PDF DELDO
+   Usa pdf.js per estrarre testo, poi regex per gli ordini.
+   Esclude DPD eilandtoeslag e altre voci non-pneumatico.
+   ========================================================== */
+async function extractTextFromPDF(file){
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  let text="";
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i);
+    const tc=await page.getTextContent();
+    const items=tc.items.map(it=>({str:it.str,x:it.transform[4],y:it.transform[5]}));
+    items.sort((a,b)=>b.y-a.y || a.x-b.x);
+    let curY=null,line=[];const lines=[];
+    for(const it of items){
+      if(curY===null||Math.abs(it.y-curY)<3){line.push(it);curY=curY??it.y}
+      else{lines.push(line);line=[it];curY=it.y}
+    }
+    if(line.length)lines.push(line);
+    for(const ln of lines){
+      ln.sort((a,b)=>a.x-b.x);
+      text += ln.map(x=>x.str).join(" ").replace(/\s+/g," ").trim() + "\n";
+    }
+    text += "\n";
+  }
+  return text;
+}
+
+function parseDeldo(text){
+  let supplierInvNum=null,supplierInvDate=null;
+  const metaM=text.match(/(\d{8})\s+(\d{2}-\d{2}-\d{4})\s+([A-Z]{2}\d+)/);
+  if(metaM){supplierInvNum=metaM[1];supplierInvDate=metaM[2]}
+
+  const blocks=text.split(/numero d'ordine\s*:/i).slice(1);
+  const orders=[];
+  const skipKeywords=["eilandtoeslag","dpd","spedizione","trasporto","passenger car tyres","ecotassa","smaltimento"];
+
+  for(const block of blocks){
+    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(\d+)\s*-\s*(\d+)/);
+    if(!ord)continue;
+    const order={
+      orderId1:ord[1],orderId2:ord[2],ref1:ord[3],ref2:ord[4],
+      client:{name:"",street:"",city:"",country:"Italy"},
+      items:[]
+    };
+
+    // INDIRIZZO CLIENTE
+    const addrM=block.match(/indirizzo di\s+([\s\S]+)/i);
+    if(addrM){
+      const addrBlock=addrM[1];
+      const lines=[];
+      for(const raw of addrBlock.split("\n")){
+        const s=raw.trim();
+        if(!s)continue;
+        if(/^\d{1,3}\s+\d{2,3}\s+\d{2,3}/.test(s))break;
+        if(/^\d+\s+DPD/i.test(s))break;
+        lines.push(s);
+      }
+      const nameParts=[];let capCity="";let street="";
+      // Il CAP italiano deve essere preceduto da spazio/trattino (non da altra cifra)
+      // così non matcha porzioni di telefono lunghi.
+      const capRe=/(?:^|[\s\-])(\d{5}\s+\S.*)$/;
+      for(const ln of lines){
+        const capInLine=ln.match(capRe);
+        if(capInLine && !/^\d{5}\s/.test(ln)){
+          const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
+          const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
+          const right=capInLine[1].trim();
+          if(left)nameParts.push(left);
+          if(!capCity)capCity=right;
+          continue;
+        }
+        if(ln==="Italy")continue;
+        if(/^\d{5}\s/.test(ln)){if(!capCity)capCity=ln;continue}
+        if(/^\d{7,}-?$/.test(ln))continue;
+        if(/^[\d\s\-]+$/.test(ln) && /\d{7,}/.test(ln))continue;
+        if(/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada)/i.test(ln)){
+          if(!street)street=ln;
+          continue;
+        }
+        const cleaned=ln.replace(/\s+Italy\s*$/,"").replace(/^[-\s,]+|[-\s,]+$/g,"");
+        if(cleaned)nameParts.push(cleaned);
+      }
+      capCity=capCity.replace(/\s+Italy\s*$/,"").trim();
+      let fullName=nameParts.join(" ");
+      fullName=fullName.replace(/-?\s*\d{7,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
+      order.client={name:fullName,street,city:capCity,country:"Italy"};
+    }
+
+    // RIGHE ARTICOLI
+    const cleanLines=[];
+    const afterIt=block.split(/\bItaly\b/);
+    const itemsSection=afterIt.length>1?afterIt.slice(1).join(" Italy "):block;
+    for(const raw of itemsSection.split("\n")){
+      const s=raw.trim();
+      if(!s)continue;
+      if(/^label\s*:/i.test(s))continue;
+      if(/^\d{8,}$/.test(s))continue;
+      if(/Pagina:|www\.deldo\.com/.test(s))continue;
+      if(/condizioni generali/i.test(s))break;
+      cleanLines.push(s);
+    }
+
+    // Merge righe spezzate (descrizione su 2 righe, es. "Cinturato All Season SF 3" + "F 3")
+    const merged=[];
+    let i=0;
+    while(i<cleanLines.length){
+      let cur=cleanLines[i];
+      const looksItem=/^\d{1,3}\s+\d/.test(cur);
+      const endsPrices=/\d+[.,]\d{2}\s+\d+[.,]\d{2}\s*$/.test(cur);
+      if(looksItem && !endsPrices && i+1<cleanLines.length){
+        const nxt=cleanLines[i+1];
+        if(/\d+[.,]\d{2}\s+\d+[.,]\d{2}\s*$/.test(nxt) && !/^\d{1,3}\s+\d{2,3}/.test(nxt)){
+          cur=cur+" "+nxt;merged.push(cur);i+=2;continue;
+        }else if(!/^\d{1,3}\s+\d{2,3}/.test(nxt) && i+2<cleanLines.length){
+          const nxt2=cleanLines[i+2];
+          if(/\d+[.,]\d{2}\s+\d+[.,]\d{2}\s*$/.test(nxt2)){
+            cur=cur+" "+nxt+" "+nxt2;merged.push(cur);i+=3;continue;
+          }
+        }
+      }
+      merged.push(cur);i++;
+    }
+
+    const itemRe=/^(\d{1,3})\s+(.+?)\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})\s*$/;
+    for(const ln of merged){
+      const m=ln.match(itemRe);
+      if(!m)continue;
+      const qty=parseInt(m[1]);
+      const desc=m[2].trim();
+      const price=parseFloat(m[3].replace(",","."));
+      const total=parseFloat(m[4].replace(",","."));
+      const dl=desc.toLowerCase();
+      if(skipKeywords.some(k=>dl.includes(k)))continue;
+      if(/\b\d{8}\b/.test(desc))continue;
+      if(!/\d{3}\s*[\/\s]\s*\d{2,3}\b/.test(desc))continue;
+      order.items.push({quantity:qty,description:desc,unitPrice:price,total});
+    }
+
+    if(order.items.length>0)orders.push(order);
+  }
+  return {meta:{supplierInvNum,supplierInvDate},orders};
+}
+
+/* ==========================================================
+   UTILITIES
+   ========================================================== */
+function applyMarkup(price,tiers){
+  const tier=tiers.find(t=>price>=parseFloat(t.min) && price<parseFloat(t.max))||tiers[tiers.length-1];
+  if(!tier)return price;
+  const m=parseFloat(tier.markupPct)||0;
+  const f=parseFloat(tier.flatFee)||0;
+  return price*(1+m/100)+f;
+}
+const fmtEur=v=>new Intl.NumberFormat("it-IT",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v||0);
+const todayIso=()=>new Date().toISOString().slice(0,10);
+function isoToIt(iso){if(!iso)return"";const[y,m,d]=iso.split("-");return`${d}/${m}/${y}`}
+function nextInvoiceNumber(inv){
+  const y=new Date().getFullYear();
+  const num=(inv.invoiceYear===y?inv.lastInvoiceNumber:0)+1;
+  return {year:y,num,formatted:`${y}/${String(num).padStart(4,"0")}`};
+}
+
+/* ==========================================================
+   DESIGN SYSTEM (identico a index.html)
+   ========================================================== */
+const S={
+  card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:14},
+  label:{display:"block",fontSize:11,color:"var(--text-label)",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
+  input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box",fontFamily:"inherit"},
+  badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
+};
+
+function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
+function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
+function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
+function Btn({children,onClick,v="pri",style,disabled,type}){
+  const bg={pri:"#6366f1",ok:"#10b981",danger:"#ef4444",ghost:"transparent"}[v];
+  const bd=v==="ghost"?"1px solid var(--ghost-border)":"none";
+  const cl=v==="ghost"?"var(--ghost-text)":"#fff";
+  return<button onClick={onClick} disabled={disabled} type={type||"button"} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",fontFamily:"inherit",...style}}>{children}</button>
+}
+
+/* ==========================================================
+   TAB: Genera fattura
+   ========================================================== */
+function GenerateTab({inv,saveInv}){
+  const[file,sFile]=useState(null);
+  const[parsing,sParsing]=useState(false);
+  const[parsed,sParsed]=useState(null);
+  const[parseErr,sParseErr]=useState(null);
+  const[customerId,sCustomerId]=useState(inv.customers[0]?.id||"");
+  const[invDate,sInvDate]=useState(todayIso());
+  const[invNumOverride,sInvNumOverride]=useState("");
+  const[generated,sGen]=useState(false);
+
+  const next=useMemo(()=>nextInvoiceNumber(inv),[inv.lastInvoiceNumber,inv.invoiceYear]);
+  const effectiveInvNum=invNumOverride.trim()||next.formatted;
+
+  const handleFile=async(f)=>{
+    if(!f)return;
+    sFile(f);sParsed(null);sParseErr(null);sParsing(true);sGen(false);
+    try{
+      const txt=await extractTextFromPDF(f);
+      const result=parseDeldo(txt);
+      if(!result.orders.length){sParseErr("Nessun ordine trovato nel PDF. Verifica che sia una fattura Deldo valida.");}
+      else sParsed(result);
+    }catch(e){sParseErr("Errore nel parsing: "+e.message);console.error(e);}
+    finally{sParsing(false);}
+  };
+
+  const computed=useMemo(()=>{
+    if(!parsed)return null;
+    const lines=[];
+    let totalNet=0,totalGross=0,totalQty=0;
+    for(const ord of parsed.orders){
+      for(const it of ord.items){
+        const unitMarked=applyMarkup(it.unitPrice,inv.markupTiers);
+        const lineTotal=unitMarked*it.quantity;
+        const cost=it.unitPrice*it.quantity;
+        totalNet+=cost;totalGross+=lineTotal;totalQty+=it.quantity;
+        lines.push({
+          orderRef:ord.ref2,
+          clientName:ord.client.name,
+          clientAddr:[ord.client.street,ord.client.city,ord.client.country].filter(Boolean).join(", "),
+          quantity:it.quantity,
+          description:it.description,
+          unitCost:it.unitPrice,
+          unitPrice:unitMarked,
+          lineTotal,
+          cost
+        });
+      }
+    }
+    return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet};
+  },[parsed,inv.markupTiers]);
+
+  const customer=inv.customers.find(c=>String(c.id)===String(customerId));
+
+  const generatePDF=()=>{
+    if(!computed||!customer)return;
+
+    // controllo duplicati nello storico
+    const existing=(inv.invoices||[]).find(x=>x.number===effectiveInvNum);
+    if(existing){
+      const ok=confirm(`Esiste già una fattura con numero ${effectiveInvNum} (emessa il ${isoToIt(existing.date)} a ${existing.customerName}, totale € ${fmtEur(existing.total)}).\n\nProcedere comunque?\nLa nuova fattura sostituirà quella nello storico.`);
+      if(!ok)return;
+    }
+
+    const{jsPDF}=window.jspdf;
+    const doc=new jsPDF({unit:"mm",format:"a4"});
+    const pw=doc.internal.pageSize.getWidth();
+
+    // HEADER
+    doc.setFont("helvetica","bold");doc.setFontSize(20);
+    doc.text("FATTURA / INVOICE",pw-15,18,{align:"right"});
+    doc.setFontSize(11);doc.setFont("helvetica","bold");
+    doc.text(ISSUER.name,15,18);
+    doc.setFont("helvetica","normal");doc.setFontSize(9);
+    doc.text(ISSUER.address1,15,23);
+    doc.text(ISSUER.address2,15,27);
+    doc.text(ISSUER.country,15,31);
+    doc.text("VAT: "+ISSUER.vat,15,35);
+    doc.setDrawColor(180);doc.setLineWidth(.3);
+    doc.line(15,42,pw-15,42);
+    doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
+    doc.text("NUMERO FATTURA",15,48);
+    doc.text("DATA FATTURA",70,48);
+    doc.text("PARTITA IVA EMITTENTE",125,48);
+    doc.setTextColor(0);doc.setFont("helvetica","normal");doc.setFontSize(11);
+    doc.text(effectiveInvNum,15,53);
+    doc.text(isoToIt(invDate),70,53);
+    doc.text(ISSUER.vat,125,53);
+    doc.line(15,58,pw-15,58);
+
+    // CLIENTE
+    doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
+    doc.text("FATTURATO A:",15,65);
+    doc.setTextColor(0);doc.setFont("helvetica","bold");doc.setFontSize(11);
+    doc.text(customer.name,15,71);
+    doc.setFont("helvetica","normal");doc.setFontSize(10);
+    let yy=76;
+    if(customer.address1){doc.text(customer.address1,15,yy);yy+=4.5}
+    if(customer.zip||customer.city){doc.text(`${customer.zip||""} ${customer.city||""}`.trim(),15,yy);yy+=4.5}
+    if(customer.country){doc.text(customer.country,15,yy);yy+=4.5}
+    doc.setFont("helvetica","bold");
+    doc.text("P.IVA: "+customer.vat,15,yy);
+
+    // TABELLA
+    const body=computed.lines.map(l=>[
+      String(l.quantity),
+      l.description,
+      l.clientName+(l.clientAddr?"\n"+l.clientAddr:""),
+      fmtEur(l.unitPrice),
+      fmtEur(l.lineTotal)
+    ]);
+    doc.autoTable({
+      startY:Math.max(yy+8,100),
+      head:[["Q.tà","Descrizione pneumatico","Indirizzo di consegna","Prezzo unit. €","Totale €"]],
+      body,
+      theme:"grid",
+      styles:{font:"helvetica",fontSize:8.5,cellPadding:2.5,lineColor:[200,200,200]},
+      headStyles:{fillColor:[60,60,80],textColor:[255,255,255],fontStyle:"bold",fontSize:9},
+      columnStyles:{
+        0:{halign:"center",cellWidth:14},
+        1:{cellWidth:60},
+        2:{cellWidth:60,fontSize:7.5},
+        3:{halign:"right",cellWidth:22},
+        4:{halign:"right",cellWidth:22}
+      },
+      margin:{left:15,right:15}
+    });
+    let endY=doc.lastAutoTable.finalY+5;
+    if(endY>250){doc.addPage();endY=20}
+
+    // TOTALI
+    doc.setDrawColor(180);
+    doc.line(120,endY,pw-15,endY);endY+=5;
+    doc.setFontSize(10);doc.setFont("helvetica","normal");
+    doc.text("Imponibile:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=5;
+    doc.text("IVA (esente):",120,endY);doc.text("€ 0,00",pw-15,endY,{align:"right"});endY+=5;
+    doc.setFont("helvetica","bold");doc.setFontSize(12);
+    doc.text("TOTALE:",120,endY);doc.text("€ "+fmtEur(computed.totalGross),pw-15,endY,{align:"right"});endY+=8;
+
+    // NOTE
+    doc.setFont("helvetica","italic");doc.setFontSize(9);doc.setTextColor(80);
+    const noteLines=[
+      "Operazione non imponibile IVA - Cessione intracomunitaria di beni",
+      "ex art. 138 Direttiva 2006/112/CE - Reverse charge in capo al cessionario.",
+      "VAT exempt - Intra-Community supply of goods (Art. 138 EU VAT Directive 2006/112/EC)."
+    ];
+    if(parsed?.meta?.supplierInvNum){
+      noteLines.push("");
+      noteLines.push(`Riferimento fornitura: fattura ${parsed.meta.supplierInvNum} del ${parsed.meta.supplierInvDate}`);
+    }
+    noteLines.forEach(l=>{doc.text(l,15,endY);endY+=4.5});
+
+    // FOOTER
+    doc.setTextColor(120);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
+    const fy=doc.internal.pageSize.getHeight()-12;
+    doc.text(`${ISSUER.name} • ${ISSUER.address1}, ${ISSUER.address2}, ${ISSUER.country} • VAT ${ISSUER.vat}`,pw/2,fy,{align:"center"});
+
+    // Download immediato
+    const fname=`Fattura_${effectiveInvNum.replace(/[\/\\]/g,"-")}_${customer.name.replace(/[^a-z0-9]/gi,"_").slice(0,20)}.pdf`;
+    doc.save(fname);
+
+    // Salva nello storico (PDF in base64 + metadati)
+    const pdfDataUri=doc.output("datauristring");
+    const pdfBase64=pdfDataUri.split(",")[1];
+    const record={
+      id:Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      number:effectiveInvNum,
+      date:invDate,
+      filename:fname,
+      customerId:customer.id,
+      customerName:customer.name,
+      customerVat:customer.vat,
+      total:computed.totalGross,
+      cost:computed.totalNet,
+      margin:computed.margin,
+      qty:computed.totalQty,
+      lineCount:computed.lines.length,
+      supplierInvNum:parsed?.meta?.supplierInvNum||null,
+      supplierInvDate:parsed?.meta?.supplierInvDate||null,
+      lines:computed.lines.map(l=>({
+        quantity:l.quantity,description:l.description,
+        clientName:l.clientName,clientAddr:l.clientAddr,
+        unitCost:l.unitCost,unitPrice:l.unitPrice,lineTotal:l.lineTotal
+      })),
+      pdfBase64,
+      createdAt:new Date().toISOString()
+    };
+    const filtered=(inv.invoices||[]).filter(x=>x.number!==effectiveInvNum);
+    const newInvoices=[record,...filtered];
+    const newState={
+      ...inv,
+      invoices:newInvoices,
+      ...(invNumOverride.trim()||existing?{}:{lastInvoiceNumber:next.num,invoiceYear:next.year})
+    };
+    try{
+      saveInv(newState);
+      sGen(true);
+    }catch(e){
+      console.error(e);
+      alert("⚠️ Storage pieno: il PDF è stato scaricato ma NON salvato nello storico.\nVai in 'Storico' e cancella le fatture più vecchie per liberare spazio.");
+      try{
+        const lightRecord={...record,pdfBase64:null,_storageOmitted:true};
+        saveInv({...newState,invoices:[lightRecord,...filtered]});
+        sGen(true);
+      }catch(e2){console.error(e2)}
+    }
+  };
+
+  return<div>
+    <Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fattura passiva (PDF Deldo)</h3>
+      {!file&&<label style={{display:"block",padding:"30px",borderRadius:10,background:"var(--bg-input)",border:"2px dashed var(--border-input)",textAlign:"center",cursor:"pointer"}}>
+        <div style={{fontSize:32,marginBottom:6}}>📄</div>
+        <div style={{color:"var(--text)",fontWeight:600}}>Clicca per caricare il PDF della fattura passiva</div>
+        <div style={{color:"var(--text-muted)",fontSize:12,marginTop:4}}>Formato Deldo Autobanden NV (.pdf)</div>
+        <input type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+      </label>}
+      {file&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"var(--bg-input)",borderRadius:8,border:"1px solid var(--border-input)"}}>
+        <div>
+          <strong style={{color:"var(--text)"}}>📄 {file.name}</strong>
+          {parsing&&<div style={{color:"#f59e0b",fontSize:12,marginTop:4}}>⏳ Estrazione in corso...</div>}
+          {parsed&&<div style={{color:"#10b981",fontSize:12,marginTop:4}}>✓ {parsed.orders.length} ordini, {parsed.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.quantity,0),0)} pezzi</div>}
+          {parseErr&&<div style={{color:"#ef4444",fontSize:12,marginTop:4}}>❌ {parseErr}</div>}
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <label style={{padding:"6px 12px",borderRadius:6,background:"var(--border)",color:"var(--text)",fontWeight:600,fontSize:12,cursor:"pointer"}}>
+            Sostituisci<input type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+          </label>
+          <Btn v="danger" onClick={()=>{sFile(null);sParsed(null);sParseErr(null);sGen(false)}} style={{fontSize:11}}>✕</Btn>
+        </div>
+      </div>}
+    </Card>
+
+    {parsed&&computed&&<Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>2. Anteprima righe estratte</h3>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,marginBottom:12}}>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Ordini</div>
+          <div style={{fontSize:18,fontWeight:700}}>{parsed.orders.length}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Pezzi</div>
+          <div style={{fontSize:18,fontWeight:700}}>{computed.totalQty}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Costo</div>
+          <div style={{fontSize:18,fontWeight:700}}>€ {fmtEur(computed.totalNet)}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Vendita</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.totalGross)}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.margin)}</div>
+        </div>
+      </div>
+      <div style={{maxHeight:280,overflowY:"auto",border:"1px solid var(--border)",borderRadius:8}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead style={{background:"var(--bg-input)",position:"sticky",top:0}}>
+            <tr>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Acquisto</th>
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Vendita</th>
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
+            </tr>
+          </thead>
+          <tbody>
+            {computed.lines.map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)"}}>
+              <td style={{padding:8}}>{l.quantity}</td>
+              <td style={{padding:8}}>{l.description}</td>
+              <td style={{padding:8,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
+              <td style={{padding:8,textAlign:"right",color:"var(--text-muted)"}}>€ {fmtEur(l.unitCost)}</td>
+              <td style={{padding:8,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
+              <td style={{padding:8,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </Card>}
+
+    {parsed&&<Card>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>3. Dati fattura attiva</h3>
+      {inv.customers.length===0?
+        <p style={{color:"#f59e0b",margin:0}}>⚠️ Nessun cliente configurato. Aggiungilo nella tab "Clienti".</p>
+        :<>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:"0 14px"}}>
+            <Sel label="Cliente B2B *" value={customerId} onChange={e=>sCustomerId(e.target.value)} options={inv.customers.map(c=>({v:c.id,l:c.name+" - "+c.vat}))}/>
+            <Inp label="Numero fattura" value={invNumOverride} onChange={e=>sInvNumOverride(e.target.value)} placeholder={next.formatted}/>
+            <Inp label="Data fattura" type="date" value={invDate} onChange={e=>sInvDate(e.target.value)}/>
+          </div>
+          <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0 12px"}}>
+            Numero progressivo automatico: <strong>{next.formatted}</strong>. Se lasci vuoto il campo viene usato questo, e dopo l'emissione il contatore avanza automaticamente.
+          </p>
+          <div style={{textAlign:"center"}}>
+            <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>📄 Genera fattura PDF</Btn>
+          </div>
+          {generated&&<div style={{textAlign:"center",marginTop:12,color:"#10b981",fontSize:13}}>
+            ✓ PDF generato, scaricato e salvato in <strong>Storico</strong>. Prossima fattura: {nextInvoiceNumber({...inv,lastInvoiceNumber:next.num,invoiceYear:next.year}).formatted}
+          </div>}
+        </>}
+    </Card>}
+  </div>
+}
+
+/* ==========================================================
+   TAB: Storico
+   ========================================================== */
+function HistoryTab({inv,saveInv}){
+  const invoices=inv.invoices||[];
+  const[query,sQuery]=useState("");
+  const[yearFilter,sYearFilter]=useState("all");
+  const[expanded,sExpanded]=useState(null);
+
+  const storageInfo=useMemo(()=>{
+    try{
+      const raw=localStorage.getItem(INV_KEY)||"";
+      const bytes=new Blob([raw]).size;
+      const mb=bytes/1024/1024;
+      const limit=5;
+      const pct=Math.min(100,(mb/limit)*100);
+      return {mb,pct,limit};
+    }catch{return {mb:0,pct:0,limit:5};}
+  },[invoices.length,inv]);
+
+  const years=useMemo(()=>{
+    const set=new Set(invoices.map(x=>(x.date||"").slice(0,4)).filter(Boolean));
+    return [...set].sort().reverse();
+  },[invoices]);
+
+  const filtered=useMemo(()=>{
+    let list=[...invoices];
+    if(yearFilter!=="all")list=list.filter(x=>(x.date||"").startsWith(yearFilter));
+    if(query.trim()){
+      const q=query.trim().toLowerCase();
+      list=list.filter(x=>
+        (x.number||"").toLowerCase().includes(q) ||
+        (x.customerName||"").toLowerCase().includes(q) ||
+        (x.customerVat||"").toLowerCase().includes(q) ||
+        (x.supplierInvNum||"").toLowerCase().includes(q)
+      );
+    }
+    list.sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""));
+    return list;
+  },[invoices,query,yearFilter]);
+
+  const stats=useMemo(()=>({
+    count:filtered.length,
+    totRev:filtered.reduce((s,x)=>s+(x.total||0),0),
+    totMargin:filtered.reduce((s,x)=>s+(x.margin||0),0),
+    totQty:filtered.reduce((s,x)=>s+(x.qty||0),0)
+  }),[filtered]);
+
+  const downloadPDF=(rec)=>{
+    if(!rec.pdfBase64){alert("PDF non disponibile per questa fattura (non era stato salvato per limiti di storage).");return}
+    try{
+      const bin=atob(rec.pdfBase64);
+      const arr=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+      const blob=new Blob([arr],{type:"application/pdf"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;a.download=rec.filename||`Fattura_${rec.number}.pdf`;
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){console.error(e);alert("Errore nel download del PDF: "+e.message)}
+  };
+
+  const removeOne=(rec)=>{
+    if(!confirm(`Eliminare la fattura ${rec.number} dallo storico?\n\nIl PDF già scaricato rimarrà nel tuo computer, ma non potrà più essere ri-scaricato da qui.`))return;
+    saveInv({...inv,invoices:invoices.filter(x=>x.id!==rec.id)});
+  };
+
+  const clearAll=()=>{
+    if(!confirm("⚠️ Eliminare TUTTO lo storico? Operazione non annullabile."))return;
+    if(!confirm("Sei davvero sicuro? Verranno persi i PDF di tutte le fatture emesse."))return;
+    saveInv({...inv,invoices:[]});
+  };
+
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:12,flexWrap:"wrap"}}>
+      <div>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Storico fatture emesse <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({invoices.length})</span></h3>
+        <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Ogni fattura include il PDF originale ri-scaricabile.</p>
+      </div>
+      {invoices.length>0&&<Btn v="danger" onClick={clearAll} style={{fontSize:12}}>Svuota storico</Btn>}
+    </div>
+
+    {invoices.length===0?
+      <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna fattura emessa. Vai su "Genera fattura" per crearne una.</p></Card>
+      :<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Fatture {yearFilter==="all"?"totali":yearFilter}</div>
+            <div style={{fontSize:22,fontWeight:700}}>{stats.count}</div>
+          </div>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Pezzi venduti</div>
+            <div style={{fontSize:22,fontWeight:700}}>{stats.totQty}</div>
+          </div>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Fatturato</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#10b981"}}>€ {fmtEur(stats.totRev)}</div>
+          </div>
+          <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#10b981"}}>€ {fmtEur(stats.totMargin)}</div>
+          </div>
+        </div>
+
+        <Card style={{padding:12,marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontSize:12,color:"var(--text-label)",fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Spazio storage</span>
+            <span style={{fontSize:12,color:"var(--text-muted)"}}>{storageInfo.mb.toFixed(2)} MB / ~{storageInfo.limit} MB</span>
+          </div>
+          <div style={{background:"var(--bg-input)",borderRadius:6,height:8,overflow:"hidden"}}>
+            <div style={{width:storageInfo.pct+"%",height:"100%",background:storageInfo.pct>80?"#ef4444":storageInfo.pct>60?"#f59e0b":"#10b981",transition:"width .3s"}}/>
+          </div>
+          {storageInfo.pct>80&&<p style={{color:"#ef4444",fontSize:12,margin:"6px 0 0"}}>⚠️ Spazio quasi esaurito. Elimina le fatture più vecchie.</p>}
+        </Card>
+
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:10,marginBottom:14}}>
+          <input value={query} onChange={e=>sQuery(e.target.value)} placeholder="🔍 Cerca per numero, cliente, P.IVA, riferimento fornitore..." style={S.input}/>
+          <select value={yearFilter} onChange={e=>sYearFilter(e.target.value)} style={S.input}>
+            <option value="all">Tutti gli anni</option>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+
+        {filtered.length===0?
+          <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna fattura corrisponde ai filtri.</p></Card>
+          :filtered.map(rec=>{
+            const isOpen=expanded===rec.id;
+            return<Card key={rec.id} style={{padding:0,overflow:"hidden"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer"}} onClick={()=>sExpanded(isOpen?null:rec.id)}>
+                <div style={{display:"flex",alignItems:"center",gap:14,flex:1,minWidth:0}}>
+                  <div style={{minWidth:90}}>
+                    <div style={{fontWeight:700,color:"var(--text)",fontSize:14}}>{rec.number}</div>
+                    <div style={{fontSize:11,color:"var(--text-muted)"}}>{isoToIt(rec.date)}</div>
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,color:"var(--text)",fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{rec.customerName}</div>
+                    <div style={{fontSize:11,color:"var(--text-muted)"}}>{rec.customerVat} • {rec.qty} pz • {rec.lineCount} righe</div>
+                  </div>
+                  <div style={{textAlign:"right",minWidth:100}}>
+                    <div style={{fontWeight:700,color:"#10b981",fontSize:14}}>€ {fmtEur(rec.total)}</div>
+                    {rec.margin!==undefined&&<div style={{fontSize:11,color:"var(--text-muted)"}}>marg. € {fmtEur(rec.margin)}</div>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:14}}>
+                  {rec._storageOmitted&&<span style={S.badge("var(--badge-warn)")} title="PDF non salvato">⚠</span>}
+                  {!rec._storageOmitted&&rec.pdfBase64&&<Btn v="ok" onClick={(e)=>{e.stopPropagation();downloadPDF(rec)}} style={{fontSize:12,padding:"6px 12px"}}>↓ PDF</Btn>}
+                  <Btn v="danger" onClick={(e)=>{e.stopPropagation();removeOne(rec)}} style={{fontSize:12,padding:"6px 10px"}}>✕</Btn>
+                  <span style={{color:"var(--text-muted)",fontSize:12,marginLeft:4,minWidth:14,textAlign:"center"}}>{isOpen?"▲":"▼"}</span>
+                </div>
+              </div>
+              {isOpen&&<div style={{borderTop:"1px solid var(--border)",padding:"14px 18px",background:"var(--bg-input)"}}>
+                {rec.supplierInvNum&&<div style={{fontSize:12,color:"var(--text-muted)",marginBottom:10}}>
+                  Riferimento fornitura: fattura <strong>{rec.supplierInvNum}</strong> del {rec.supplierInvDate}
+                </div>}
+                <div style={{maxHeight:240,overflowY:"auto",border:"1px solid var(--border)",borderRadius:6}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead style={{background:"var(--bg-card)",position:"sticky",top:0}}>
+                      <tr>
+                        <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
+                        <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
+                        <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
+                        <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Prezzo</th>
+                        <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(rec.lines||[]).map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)"}}>
+                        <td style={{padding:6}}>{l.quantity}</td>
+                        <td style={{padding:6}}>{l.description}</td>
+                        <td style={{padding:6,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
+                        <td style={{padding:6,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
+                        <td style={{padding:6,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
+                      </tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </div>}
+            </Card>;
+          })
+        }
+      </>
+    }
+  </div>
+}
+
+/* ==========================================================
+   TAB: Clienti
+   ========================================================== */
+function CustomersTab({inv,saveInv}){
+  const[ed,sEd]=useState(null);
+  const empty={name:"",vat:"",address1:"",city:"",zip:"",country:"Italy",email:"",phone:""};
+  const[f,sF]=useState(empty);
+  const nw=()=>{sF({...empty});sEd("new")};
+  const ed2=i=>{sF({...inv.customers[i]});sEd(i)};
+  const sv=()=>{
+    if(!f.name||!f.vat){alert("Nome e Partita IVA sono obbligatori");return}
+    const list=[...inv.customers];
+    if(ed==="new")list.push({...f,id:Date.now()});else list[ed]=f;
+    saveInv({...inv,customers:list});sEd(null);
+  };
+  const rm=i=>{if(!confirm("Eliminare il cliente?"))return;saveInv({...inv,customers:inv.customers.filter((_,j)=>j!==i)})};
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Clienti B2B</h3><Btn onClick={nw}>+ Aggiungi cliente</Btn>
+    </div>
+    {inv.customers.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun cliente. Aggiungi il cliente B2B a cui emetterai fattura.</p></Card>}
+    {inv.customers.map((c,i)=><Card key={i}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <strong style={{color:"var(--text)",fontSize:15}}>{c.name}</strong>
+          <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
+            <span style={S.badge("var(--badge-info)")}>P.IVA: {c.vat}</span>
+            {c.country&&<span style={S.badge("var(--badge-neutral)")}>{c.country}</span>}
+          </div>
+          <div style={{color:"var(--text-muted)",fontSize:13,marginTop:6}}>
+            {c.address1}{c.address1&&", "}{c.zip} {c.city}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn>
+          <Btn v="danger" onClick={()=>rm(i)}>✕</Btn>
+        </div>
+      </div>
+    </Card>)}
+    {ed!==null&&<Card accent="#6366f1">
+      <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo cliente":"Modifica cliente"}</h4>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
+        <Inp label="Ragione sociale *" value={f.name} onChange={e=>sF({...f,name:e.target.value})}/>
+        <Inp label="Partita IVA (con prefisso paese) *" value={f.vat} onChange={e=>sF({...f,vat:e.target.value})} placeholder="es. IT12345678901"/>
+        <Inp label="Indirizzo" value={f.address1} onChange={e=>sF({...f,address1:e.target.value})}/>
+        <Inp label="CAP" value={f.zip} onChange={e=>sF({...f,zip:e.target.value})}/>
+        <Inp label="Città" value={f.city} onChange={e=>sF({...f,city:e.target.value})}/>
+        <Inp label="Paese" value={f.country} onChange={e=>sF({...f,country:e.target.value})}/>
+        <Inp label="Email" value={f.email} onChange={e=>sF({...f,email:e.target.value})}/>
+        <Inp label="Telefono" value={f.phone} onChange={e=>sF({...f,phone:e.target.value})}/>
+      </div>
+      <p style={{color:"var(--text-muted)",fontSize:12,margin:"6px 0"}}>* campi obbligatori. Verifica che la P.IVA sia registrata in VIES per beneficiare dell'esenzione IVA art. 138 dir. 2006/112/CE.</p>
+      <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+    </Card>}
+  </div>
+}
+
+/* ==========================================================
+   TAB: Ricarichi per fascia
+   ========================================================== */
+function MarkupTab({inv,saveInv}){
+  const tiers=inv.markupTiers||[];
+  const upd=(idx,field,val)=>{const list=[...tiers];list[idx]={...list[idx],[field]:val};saveInv({...inv,markupTiers:list})};
+  const add=()=>{
+    const last=tiers[tiers.length-1];
+    const newMin=last?parseFloat(last.max)||0:0;
+    saveInv({...inv,markupTiers:[...tiers,{id:Date.now(),min:newMin,max:newMin+100,markupPct:15,flatFee:0}]});
+  };
+  const rm=idx=>saveInv({...inv,markupTiers:tiers.filter((_,j)=>j!==idx)});
+  const samples=[20,50,75,100,150];
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <div>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Regole ricarico per fascia di prezzo</h3>
+        <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Il prezzo di acquisto del pneumatico determina la fascia, e quindi il ricarico applicato.</p>
+      </div>
+      <Btn onClick={add}>+ Fascia</Btn>
+    </div>
+
+    <Card>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 40px",gap:8,alignItems:"center",marginBottom:8}}>
+        <label style={S.label}>Da € (incluso)</label>
+        <label style={S.label}>A € (escluso)</label>
+        <label style={S.label}>Ricarico %</label>
+        <label style={S.label}>+ Fisso €</label>
+        <span></span>
+      </div>
+      {tiers.map((t,i)=><div key={t.id||i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 40px",gap:8,alignItems:"center",marginBottom:6}}>
+        <input type="number" step="0.01" value={t.min} onChange={e=>upd(i,"min",e.target.value)} style={S.input}/>
+        <input type="number" step="0.01" value={t.max} onChange={e=>upd(i,"max",e.target.value)} style={S.input}/>
+        <input type="number" step="0.01" value={t.markupPct} onChange={e=>upd(i,"markupPct",e.target.value)} style={S.input}/>
+        <input type="number" step="0.01" value={t.flatFee} onChange={e=>upd(i,"flatFee",e.target.value)} style={S.input}/>
+        <Btn v="danger" onClick={()=>rm(i)} style={{padding:"6px 10px"}}>✕</Btn>
+      </div>)}
+      {tiers.length===0&&<p style={{color:"var(--text-muted)",margin:"10px 0",textAlign:"center"}}>Nessuna fascia. Aggiungine almeno una.</p>}
+    </Card>
+
+    <Card>
+      <label style={S.label}>Anteprima ricarichi</label>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginTop:6}}>
+        {samples.map(p=>{
+          const out=applyMarkup(p,tiers);
+          const tier=tiers.find(t=>p>=parseFloat(t.min)&&p<parseFloat(t.max))||tiers[tiers.length-1];
+          return<div key={p} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 12px"}}>
+            <div style={{fontSize:11,color:"var(--text-label)"}}>Acquisto € {p.toFixed(2)}</div>
+            <div style={{fontSize:18,fontWeight:700,color:"var(--text)",marginTop:2}}>€ {fmtEur(out)}</div>
+            {tier&&<div style={{fontSize:10,color:"var(--text-muted)",marginTop:2}}>+{tier.markupPct}% + {tier.flatFee}€</div>}
+          </div>;
+        })}
+      </div>
+    </Card>
+  </div>
+}
+
+/* ==========================================================
+   TAB: Settings
+   ========================================================== */
+function SettingsTab({inv,saveInv}){
+  const[year,sYear]=useState(inv.invoiceYear);
+  const[num,sNum]=useState(inv.lastInvoiceNumber);
+  const sv=()=>{saveInv({...inv,invoiceYear:parseInt(year)||new Date().getFullYear(),lastInvoiceNumber:parseInt(num)||0});alert("Salvato.")};
+  const reset=()=>{if(confirm("Reset numerazione a 0?"))saveInv({...inv,invoiceYear:new Date().getFullYear(),lastInvoiceNumber:0})};
+  const next=nextInvoiceNumber(inv);
+  return<div>
+    <h3 style={{margin:"0 0 14px",color:"var(--text)",fontSize:17}}>Impostazioni</h3>
+    <Card>
+      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Numerazione fatture</h4>
+      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 12px"}}>La prossima fattura avrà numero <strong style={{color:"var(--text)"}}>{next.formatted}</strong>.</p>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"0 14px"}}>
+        <Inp label="Anno corrente" type="number" value={year} onChange={e=>sYear(e.target.value)}/>
+        <Inp label="Ultimo numero emesso" type="number" value={num} onChange={e=>sNum(e.target.value)}/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <Btn v="ok" onClick={sv}>Salva</Btn>
+        <Btn v="danger" onClick={reset}>Reset numerazione</Btn>
+      </div>
+    </Card>
+    <Card>
+      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Dati azienda emittente</h4>
+      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 8px"}}>Dati fissi impostati nel codice (oggetto <code style={{background:"var(--bg-input)",padding:"1px 5px",borderRadius:4}}>ISSUER</code>).</p>
+      <div style={{background:"var(--bg-input)",padding:"12px 14px",borderRadius:8,fontSize:13}}>
+        <div><strong>{ISSUER.name}</strong></div>
+        <div style={{color:"var(--text-muted)"}}>{ISSUER.address1}</div>
+        <div style={{color:"var(--text-muted)"}}>{ISSUER.address2}</div>
+        <div style={{color:"var(--text-muted)"}}>{ISSUER.country}</div>
+        <div style={{marginTop:6}}><span style={S.badge("var(--badge-info)")}>VAT: {ISSUER.vat}</span></div>
+      </div>
+    </Card>
+  </div>
+}
+
+/* ==========================================================
+   APP
+   ========================================================== */
+function ThemeToggle({theme,toggle}){
+  return<button onClick={toggle} title={theme==="dark"?"Passa a light mode":"Passa a dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
+    {theme==="dark"?"☀️":"🌙"}
+  </button>
+}
+
+function App(){
+  const[inv,sInvSt]=useState(DEFAULT_INV);
+  const[tab,sTab]=useState("generate");
+  const[ok,sOk]=useState(false);
+  const[theme,sTheme]=useState(()=>localStorage.getItem("amz-theme")||"dark");
+
+  useEffect(()=>{document.body.setAttribute("data-theme",theme)},[theme]);
+  useEffect(()=>{sInvSt(loadInv());sOk(true)},[]);
+
+  const saveInv=cfg=>{sInvSt(cfg);persistInv(cfg)};
+  const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t)};
+
+  if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>Caricamento...</div>;
+
+  const tabs=[
+    {id:"generate",label:"📄 Genera fattura"},
+    {id:"history",label:"📚 Storico",n:(inv.invoices||[]).length},
+    {id:"customers",label:"👥 Clienti",n:inv.customers.length},
+    {id:"markup",label:"💰 Ricarichi",n:inv.markupTiers.length},
+    {id:"settings",label:"⚙️ Impostazioni"}
+  ];
+
+  return<div>
+    <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <div>
+          <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}>
+            <span style={{color:"#6366f1"}}>▸</span> Global Way Invoicing
+            <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400,marginLeft:8}}>v1</span>
+          </h1>
+          <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Parsing fatture passive Deldo • Fattura attiva intracomunitaria • Ricarichi per fascia</p>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <a href="index.html" className="navlink">← Inventory Converter</a>
+          <ThemeToggle theme={theme} toggle={toggleTheme}/>
+        </div>
+      </div>
+    </div>
+    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
+        {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap",fontFamily:"inherit"}}>
+          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
+        </button>)}
+      </div>
+    </div>
+    <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
+      {tab==="generate"&&<GenerateTab inv={inv} saveInv={saveInv}/>}
+      {tab==="history"&&<HistoryTab inv={inv} saveInv={saveInv}/>}
+      {tab==="customers"&&<CustomersTab inv={inv} saveInv={saveInv}/>}
+      {tab==="markup"&&<MarkupTab inv={inv} saveInv={saveInv}/>}
+      {tab==="settings"&&<SettingsTab inv={inv} saveInv={saveInv}/>}
+    </div>
+  </div>
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
