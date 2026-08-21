@@ -61,7 +61,10 @@ const recs = [
 const srv = expandRows(recs, seed, { marketplace: "IT", leadtime: 4 });
 const cli = H.expandRecords(recs, parsed, { marketplace: "IT", leadtime: 4 });
 t("righe espanse identiche", () => assert.deepEqual(cli, srv));
-t("txt identico", () => assert.equal(H.buildTxt(parsed, cli), buildTxt(seed, srv)));
+t("txt identico", () => assert.equal(H.buildTxt(parsed, cli, {marketplace:"IT"}), buildTxt(seed, srv, {marketplace:"IT"})));
+t("prezzo numerico anche lato client", () => {
+  assert.equal(typeof cli[0][H.resolveColumns(parsed).cols.price], "number");
+});
 t("prezzo formattato con la virgola", () => assert.equal(H.fmtPrice(171.61, "IT"), "171,61"));
 t("prezzo col punto su UK", () => assert.equal(H.fmtPrice(171.61, "UK"), "171.61"));
 

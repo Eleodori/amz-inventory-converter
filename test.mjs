@@ -6,7 +6,7 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import XLSX from "xlsx";
-import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck } from "./netlify/functions/_lib/converter.mjs";
+import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
 import { seedTemplate, resolveColumns } from "./netlify/functions/_lib/template.mjs";
 
 let pass = 0, fail = 0;
@@ -138,10 +138,15 @@ t("azione = 'Crea o modifica'", () => assert.equal(rows[0][cols.action], "Crea o
 t("tipo ID = EAN", () => assert.equal(rows[0][cols.extIdType], "EAN"));
 t("condizione = Nuovo", () => assert.equal(rows[0][cols.condition], "Nuovo"));
 t("canale = Gestito dal venditore (default)", () => assert.equal(rows[0][cols.channel], "Gestito dal venditore (default)"));
-t("prezzo con la virgola decimale", () => assert.match(String(rows[0][cols.price]), /^\d+,\d{2}$/));
-t("prezzo col punto su UK", () => {
-  const uk = expandRows([{ sku: "X", ean: E1, qty: 1, price: 12.5 }], template, { marketplace: "UK", leadtime: 2 });
-  assert.equal(uk[0][cols.price], "12.50");
+// Regressione dell'errore Amazon 13006: il prezzo nell'.xlsx deve essere un NUMERO.
+t("prezzo e' un numero, non una stringa", () => {
+  assert.equal(typeof rows[0][cols.price], "number");
+  assert.ok(!/,/.test(String(rows[0][cols.price])), "il prezzo non deve contenere virgole");
+});
+t("priceColumns individua le colonne importo", () => {
+  const pc = priceColumns(template);
+  assert.deepEqual(pc, [cols.price, cols.minPrice, cols.maxPrice].filter(i => i !== undefined));
+  assert.ok(pc.includes(cols.price));
 });
 t("quantita' e tempo di gestione numerici", () => {
   assert.equal(typeof rows[0][cols.quantity], "number");
@@ -154,7 +159,7 @@ t("le colonne non usate restano vuote", () => {
 });
 
 console.log("\n── .txt tab-delimited ──");
-const txt = buildTxt(template, rows);
+const txt = buildTxt(template, rows, { marketplace: "IT" });
 const lines = txt.split("\r\n");
 t("A1 conserva la stringa settings", () => assert.ok(lines[0].startsWith("settings=feedType=256")));
 t("riga 1 ha settings2 e settings3", () => {
@@ -172,13 +177,24 @@ t("ogni riga ha nCols campi", () => {
   lines.filter(l => l !== "").forEach((l, i) => assert.equal(l.split("\t").length, template.nCols, "riga " + (i + 1)));
 });
 t("nessun tab o newline dentro i valori", () => assert.equal(lines.length, 6 + rows.length + 1));
+t("nel .txt il prezzo torna testo con la virgola", () => {
+  assert.match(lines[6].split("\t")[cols.price], /^\d+,\d{2}$/);
+});
+t("nel .txt su UK il prezzo usa il punto", () => {
+  const ukRows = expandRows([{ sku: "X", ean: E1, qty: 1, price: 12.5 }], template, { marketplace: "UK", leadtime: 2 });
+  const ukTxt = buildTxt(template, ukRows, { marketplace: "UK" });
+  assert.equal(ukTxt.split("\r\n")[6].split("\t")[cols.price], "12.50");
+});
 
 console.log("\n── .xlsx sparso ──");
 function buildXlsx(t_, dataRows) {
   const ws = {}, n = t_.nCols;
+  const DEC = new Set(priceColumns(t_));
   const set = (r, c, v) => {
     if (v === "" || v === null || v === undefined) return;
-    ws[XLSX.utils.encode_cell({ r, c })] = typeof v === "number" ? { t: "n", v } : { t: "s", v: String(v) };
+    const addr = XLSX.utils.encode_cell({ r, c });
+    if (typeof v === "number") ws[addr] = DEC.has(c) ? { t: "n", v, z: "0.00" } : { t: "n", v };
+    else ws[addr] = { t: "s", v: String(v) };
   };
   const hdr = t_.headerRows || [];
   hdr.forEach((row, ri) => { for (let c = 0; c < n; c++) set(ri, c, row[c]); });
@@ -199,10 +215,10 @@ t("riletto: quantita' e' numerica", () => {
   const addr = XLSX.utils.encode_cell({ r: 6, c: cols.quantity });
   assert.equal(back.Sheets.Modello[addr].t, "n");
 });
-t("riletto: prezzo e' testo con la virgola", () => {
+t("riletto: prezzo e' una cella NUMERICA (errore 13006)", () => {
   const addr = XLSX.utils.encode_cell({ r: 6, c: cols.price });
-  assert.equal(back.Sheets.Modello[addr].t, "s");
-  assert.match(String(back.Sheets.Modello[addr].v), /,/);
+  assert.equal(back.Sheets.Modello[addr].t, "n", "il prezzo deve essere numerico, non testo");
+  assert.equal(typeof back.Sheets.Modello[addr].v, "number");
 });
 t("range copre tutte le colonne", () => {
   assert.equal(XLSX.utils.decode_range(back.Sheets.Modello["!ref"]).e.c, template.nCols - 1);

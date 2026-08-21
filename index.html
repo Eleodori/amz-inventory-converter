@@ -183,7 +183,13 @@ function resolveColumns(t){
   Object.keys(FIELD_PATTERNS).forEach(f=>{const i=attrs.findIndex(a=>FIELD_PATTERNS[f].test(a));if(i>=0)cols[f]=i;});
   return{cols,missing:REQUIRED_FIELDS.filter(f=>cols[f]===undefined),attrs};
 }
+// Solo per il .txt: un file di testo non ha tipi di cella, quindi il prezzo va
+// scritto con il separatore decimale del marketplace.
+// Nell'.xlsx il prezzo deve restare un NUMERO: come testo Amazon lo rifiuta con
+// l'errore 13006 "Formato cella errato. Imposta il formato in Excel su Numero".
 function fmtPrice(v,mp){const s=Number(v).toFixed(2);return mp==="UK"?s:s.replace(".",",")}
+function round2(n){return Math.round(Number(n)*100)/100}
+function priceColumns(t){const r=resolveColumns(t);return ["price","minPrice","maxPrice"].map(f=>r.cols[f]).filter(i=>i!==undefined)}
 
 // Espande i record compatti in righe larghe nCols. qty 0 = riga di disattivazione.
 function expandRecords(records,t,opts){
@@ -198,21 +204,24 @@ function expandRecords(records,t,opts){
     put("condition",voc.conditionNew);put("channel",voc.channelMerchant);
     put("quantity",Number(rec.qty)||0);
     if(lead!==null&&lead!==undefined&&lead!=="")put("leadtime",Number(lead));
-    put("price",fmtPrice(rec.price,mp));
-    if(rec.minPrice!=null)put("minPrice",fmtPrice(rec.minPrice,mp));
-    if(rec.maxPrice!=null)put("maxPrice",fmtPrice(rec.maxPrice,mp));
+    put("price",round2(rec.price));
+    if(rec.minPrice!=null)put("minPrice",round2(rec.minPrice));
+    if(rec.maxPrice!=null)put("maxPrice",round2(rec.maxPrice));
     return row;
   });
 }
 
 // .txt tab-delimited: equivale al "Salva come → Testo (delimitato da tabulazioni)" di Excel.
-function buildTxt(t,dataRows){
-  const n=t.nCols;
+function buildTxt(t,dataRows,opts){
+  opts=opts||{};
+  const n=t.nCols, mp=opts.marketplace||"IT";
+  const dec=new Set(opts.decimalCols||priceColumns(t));
   const pad=r=>{const a=(r||[]).slice(0,n);while(a.length<n)a.push("");return a};
   const esc=v=>String(v==null?"":v).replace(/\t/g," ").replace(/\r?\n/g," ");
+  const fmt=(v,i)=>(dec.has(i)&&typeof v==="number")?fmtPrice(v,mp):esc(v);
   const lines=[];
   (t.headerRows||[]).forEach(hr=>lines.push(pad(hr).map(esc).join("\t")));
-  dataRows.forEach(dr=>lines.push(pad(dr).map(esc).join("\t")));
+  dataRows.forEach(dr=>lines.push(pad(dr).map(fmt).join("\t")));
   return lines.join("\r\n")+"\r\n";
 }
 
@@ -221,9 +230,14 @@ function buildTxt(t,dataRows){
 function buildXlsx(t,dataRows){
   if(typeof XLSX==="undefined")throw new Error("Libreria Excel non caricata, ricarica la pagina");
   const ws={},n=t.nCols;
+  const dec=new Set(priceColumns(t));
   const set=(r,c,v)=>{
     if(v===""||v===null||v===undefined)return;
-    ws[XLSX.utils.encode_cell({r:r,c:c})]=typeof v==="number"?{t:"n",v:v}:{t:"s",v:String(v)};
+    const addr=XLSX.utils.encode_cell({r:r,c:c});
+    if(typeof v==="number"){
+      // I prezzi restano numerici con due decimali: Amazon rifiuta il testo (errore 13006)
+      ws[addr]=dec.has(c)?{t:"n",v:v,z:"0.00"}:{t:"n",v:v};
+    }else ws[addr]={t:"s",v:String(v)};
   };
   const hdr=t.headerRows||[];
   hdr.forEach((row,ri)=>{for(let c=0;c<n;c++)set(ri,c,row[c])});
@@ -903,7 +917,7 @@ function DownloadBox({records,stats,filename,label,accent}){
         const buf=buildXlsx(t,rows);
         dlBlob(buf,base+".xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       }else{
-        dlBlob(buildTxt(t,rows),base+".txt","text/plain;charset=utf-8");
+        dlBlob(buildTxt(t,rows,{marketplace:stats.marketplace}),base+".txt","text/plain;charset=utf-8");
       }
     }catch(e){setErr(e.message)}
     finally{setBusy(null)}

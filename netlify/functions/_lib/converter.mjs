@@ -111,10 +111,24 @@ export function tierKeyFor(price, tiers) {
   return (t.upTo === null || t.upTo === undefined) ? `>${sorted[idx - 1]?.upTo ?? 0}€` : `≤${t.upTo}€`;
 }
 
-/** Amazon vuole il punto decimale su UK, la virgola su tutti gli altri marketplace. */
+/**
+ * Formattazione del prezzo per il file di TESTO tab-delimited: punto decimale su
+ * UK, virgola sugli altri marketplace.
+ *
+ * ATTENZIONE: non usarla per l'.xlsx. Amazon rifiuta il prezzo scritto come testo
+ * con l'errore 13006 ("Formato cella errato. Imposta il formato in Excel su
+ * Numero"). Nell'.xlsx il prezzo deve essere una cella numerica: un numero non ha
+ * separatore decimale, quindi la questione virgola/punto non esiste.
+ */
 export function formatPrice(value, marketplace) {
   const s = Number(value).toFixed(2);
   return marketplace === "UK" ? s : s.replace(".", ",");
+}
+
+/** Indici delle colonne che contengono un importo (da formattare solo nel .txt). */
+export function priceColumns(template) {
+  const { cols } = resolveColumns(template);
+  return ["price", "minPrice", "maxPrice"].map(f => cols[f]).filter(i => i !== undefined);
 }
 
 export function resolveDuplicate(existing, candidate, mode, supplierPriority) {
@@ -155,21 +169,30 @@ export function expandRows(records, template, opts = {}) {
     put("channel", vocab.channelMerchant);
     put("quantity", Number(rec.qty) || 0);
     if (leadtime !== null && leadtime !== undefined && leadtime !== "") put("leadtime", Number(leadtime));
-    put("price", formatPrice(rec.price, marketplace));
-    if (rec.minPrice != null) put("minPrice", formatPrice(rec.minPrice, marketplace));
-    if (rec.maxPrice != null) put("maxPrice", formatPrice(rec.maxPrice, marketplace));
+    // Prezzi come NUMERI, non come stringhe: nell'.xlsx devono essere celle
+    // numeriche (errore 13006). buildTxt li converte in testo con la virgola.
+    put("price", round2(rec.price));
+    if (rec.minPrice != null) put("minPrice", round2(rec.minPrice));
+    if (rec.maxPrice != null) put("maxPrice", round2(rec.maxPrice));
     return row;
   });
 }
 
-/** Serializza header + dati come .txt tab-delimited (equivalente al "Salva come testo" di Excel). */
-export function buildTxt(template, dataRows) {
+/**
+ * Serializza header + dati come .txt tab-delimited (equivalente al "Salva come
+ * testo (delimitato da tabulazioni)" di Excel). Qui i prezzi diventano testo con
+ * il separatore decimale del marketplace, perche' un file di testo non ha tipi.
+ */
+export function buildTxt(template, dataRows, opts = {}) {
   const n = template.nCols;
+  const marketplace = opts.marketplace || "IT";
+  const decCols = new Set(opts.decimalCols || priceColumns(template));
   const pad = r => { const a = (r || []).slice(0, n); while (a.length < n) a.push(""); return a; };
   const esc = v => String(v ?? "").replace(/\t/g, " ").replace(/\r?\n/g, " ");
+  const fmt = (v, i) => (decCols.has(i) && typeof v === "number") ? formatPrice(v, marketplace) : esc(v);
   const lines = [];
   for (const hr of template.headerRows) lines.push(pad(hr).map(esc).join("\t"));
-  for (const dr of dataRows) lines.push(pad(dr).map(esc).join("\t"));
+  for (const dr of dataRows) lines.push(pad(dr).map((v, i) => fmt(v, i)).join("\t"));
   return lines.join("\r\n") + "\r\n";
 }
 
