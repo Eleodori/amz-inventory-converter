@@ -27,8 +27,8 @@ Cinque cose richiedono attenzione, in ordine di urgenza:
 Ho letto tutta la repo. Ricostruzione del flusso:
 
 ```
-Deldo → FTPS (ftp.michelee14.sg-host.com)
-          /michelee14.sg-host.com/fornitori/DLD/*.csv
+Deldo → FTPS ($FTP_HOST)
+          <dominio>/fornitori/DLD/*.csv
    ↓
 scheduled-convert.mjs   (cron "15 8 * * 1-6" = 10:15 IT in ora legale, Lun-Sab)
    ↓ parseCSV(";")  →  filtri  →  dedup per EAN  →  applyTiers()
