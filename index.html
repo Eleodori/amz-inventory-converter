@@ -888,10 +888,14 @@ function AlertBell({onClick,count}){
 function DownloadBox({records,stats,filename,label,accent}){
   const[busy,setBusy]=useState(null);
   const[err,setErr]=useState(null);
+  const empty=!records||records.length===0;
 
   const make=async(kind)=>{
     setBusy(kind);setErr(null);
     try{
+      // Un file con le sole intestazioni, caricato con "Elimina e sostituisci",
+      // cancella tutto l'inventario. Non lo generiamo mai.
+      if(empty)throw new Error("Nessuna riga da scrivere: rigenera prima di scaricare");
       const t=await getFullTemplate();
       const rows=expandRecords(records,t,{marketplace:stats.marketplace,leadtime:stats.leadtime});
       const base=filename||("Offerte_"+(stats.marketplace||"IT")+"_"+new Date().toISOString().slice(0,10));
@@ -904,6 +908,21 @@ function DownloadBox({records,stats,filename,label,accent}){
     }catch(e){setErr(e.message)}
     finally{setBusy(null)}
   };
+
+  if(empty)return(
+    <div style={{padding:"12px 14px",background:"var(--bl-bg)",border:"1px solid var(--bl-border)",borderRadius:10}}>
+      <div style={{fontWeight:700,fontSize:13,color:"var(--bl-text)",marginBottom:4}}>⛔ Nessuna riga da scaricare</div>
+      <div style={{fontSize:12,color:"var(--bl-text)",lineHeight:1.6}}>
+        Questo risultato non contiene righe dati — probabilmente è stato generato dalla versione
+        precedente dell'app, che salvava il file in un altro formato. Premi
+        “Genera adesso da FTP” per rifarlo.
+        <div style={{marginTop:6}}>
+          Il download è bloccato di proposito: un file con le sole intestazioni, caricato con
+          “Elimina e sostituisci”, cancellerebbe tutto l'inventario.
+        </div>
+      </div>
+    </div>
+  );
 
   return(
     <div>
@@ -1369,6 +1388,17 @@ function AutoTab({config:c}){
               color:view===v?"var(--accent-form)":"var(--text-label)"}}>{l}</div>
           ))}
         </div>
+      )}
+
+      {shown&&shown.stats&&!shown.records&&(
+        <Card accent="#ef4444">
+          <h4 style={{margin:"0 0 6px",color:"#ef4444"}}>⚠️ Risultato della versione precedente</h4>
+          <p style={{fontSize:12,color:"var(--text-muted)",margin:0,lineHeight:1.6}}>
+            Questo risultato è stato salvato dalla versione precedente dell'app, che teneva il file
+            in un altro formato. Le righe non sono rileggibili: premi “Genera adesso da FTP” prima di
+            scaricare qualsiasi cosa.
+          </p>
+        </Card>
       )}
 
       {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Caricamento...</p></Card>}
