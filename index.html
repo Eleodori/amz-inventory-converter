@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -52,8 +53,10 @@ body{background:var(--bg);color:var(--text)}
 <div id="root"></div>
 <script type="text/babel">
 const {useState,useEffect,useCallback,useRef}=React;
-const STORE_KEY="amz-conv-v4";
-const DEFAULT={suppliers:[],marketplaces:[],blacklist:[]};
+const STORE_KEY="amz-conv-v6";
+const DEFAULT={suppliers:[],marketplaces:[],blacklist:[],
+  qtyMode:"catalog",dupMode:"price",minStock:0,maxQty:0,floorMarginPct:0,
+  zeroKeepDays:90,maxDeltaPct:20,minProducts:100};
 const EU_MP=[
 {code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
 {code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
@@ -69,11 +72,39 @@ const DEFAULT_TIERS=[
   {upTo:null,markupPct:10,flatFee:30}
 ];
 
+function sortTiers(tiers){
+  return [...tiers].sort((a,b)=>{
+    if(a.upTo===null||a.upTo===undefined)return 1;
+    if(b.upTo===null||b.upTo===undefined)return -1;
+    return a.upTo-b.upTo;
+  });
+}
+// Ordinamento difensivo: il find() assume scaglioni crescenti. Riordinandoli
+// dall'interfaccia, senza sort si applicherebbe il markup dello scaglione sbagliato.
 function applyTiers(rp,tiers){
   if(!tiers||tiers.length===0)return rp;
-  const tier=tiers.find(t=>t.upTo===null||rp<=t.upTo);
+  const tier=sortTiers(tiers).find(t=>t.upTo===null||t.upTo===undefined||rp<=t.upTo);
   if(!tier)return rp;
-  return rp*(1+tier.markupPct/100)+tier.flatFee;
+  return rp*(1+(tier.markupPct||0)/100)+(tier.flatFee||0);
+}
+function tierKeyFor(rp,tiers){
+  if(!tiers||tiers.length===0)return "\u2014";
+  const sorted=sortTiers(tiers);
+  const idx=sorted.findIndex(t=>t.upTo===null||t.upTo===undefined||rp<=t.upTo);
+  const t=sorted[idx];
+  if(!t)return "\u2014";
+  return (t.upTo===null||t.upTo===undefined)?">"+((sorted[idx-1]||{}).upTo||0)+"\u20ac":"\u2264"+t.upTo+"\u20ac";
+}
+// Il vecchio controllo era ean.length<8: passavano stringhe non numeriche e
+// codici di lunghezza arbitraria, che Amazon rifiuta (errori 5501 / 8541).
+function normalizeEAN(raw){
+  const v=String(raw==null?"":raw).trim().replace(/\s+/g,"");
+  if(!/^\d+$/.test(v))return null;
+  if([8,12,13,14].indexOf(v.length)<0)return null;
+  let sum=0;
+  for(let i=v.length-2,w=3;i>=0;i--,w=(w===3?1:3))sum+=Number(v[i])*w;
+  if(((10-(sum%10))%10)!==Number(v[v.length-1]))return null;
+  return v;
 }
 
 function migrate(raw){
@@ -89,8 +120,175 @@ function loadLocal(){try{return migrate(JSON.parse(localStorage.getItem(STORE_KE
 function persistLocal(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
 async function loadRemote(){try{const r=await fetch("/api/config");if(!r.ok)return null;return await r.json();}catch{return null;}}
 async function persistRemote(c){try{await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});}catch(e){console.warn("Config remote save failed:",e);}}
-function parseCSV(t,d){const ls=t.split(/\r?\n/).filter(l=>l.trim());if(ls.length<2)return{h:[],r:[]};const h=ls[0].split(d).map(x=>x.trim());const r=ls.slice(1).map(l=>{const c=l.split(d);const o={};h.forEach((k,i)=>o[k]=(c[i]||"").trim());return o});return{h,r}}
-function fCol(hs,n){return hs.find(h=>h.toLowerCase()===n.toLowerCase())}
+// Parser che gestisce i campi quotati: con il vecchio split(delimiter) bastava
+// un campo tipo "Pirelli; P Zero" per far slittare tutte le colonne successive
+// e pubblicare un prezzo letto dalla colonna sbagliata, senza alcun errore.
+function parseCSV(text,delimiter){
+  if(!text)return{h:[],r:[]};
+  const src=text.charCodeAt(0)===0xfeff?text.slice(1):text;
+  const d=delimiter||";";
+  const recs=[];let field="",rec=[],q=false;
+  for(let i=0;i<src.length;i++){
+    const ch=src[i];
+    if(q){
+      if(ch==='"'){if(src[i+1]==='"'){field+='"';i++;}else q=false;}
+      else field+=ch;
+      continue;
+    }
+    if(ch==='"'&&field===""){q=true;continue;}
+    if(ch===d){rec.push(field);field="";continue;}
+    if(ch==="\r")continue;
+    if(ch==="\n"){rec.push(field);recs.push(rec);rec=[];field="";continue;}
+    field+=ch;
+  }
+  if(field!==""||rec.length){rec.push(field);recs.push(rec);}
+  const ne=recs.filter(r=>r.some(c=>c.trim()!==""));
+  if(ne.length<2)return{h:[],r:[]};
+  const h=ne[0].map(x=>x.trim());
+  const r=ne.slice(1).map(cols=>{const o={};h.forEach((k,i)=>{o[k]=(cols[i]==null?"":cols[i]).trim()});return o});
+  return{h,r};
+}
+function fCol(hs,n){return n?(hs.find(h=>h.toLowerCase()===String(n).toLowerCase())||null):null}
+
+// ─── Formato template Amazon (lato browser) ──────────────────────────────────
+// Stesse regole del server (netlify/functions/_lib/template.mjs): le colonne si
+// risolvono per pattern sulla riga degli attributi, mai per posizione fissa.
+const FIELD_PATTERNS={
+  sku:/^contribution_sku#1\.value$/,
+  action:/^::record_action$/,
+  extIdType:/^externally_assigned_product_identifier#1\.type$/,
+  extId:/^externally_assigned_product_identifier#1\.value$/,
+  condition:/^condition_type#1\.value$/,
+  channel:/^fulfillment_availability#1\.fulfillment_channel_code$/,
+  quantity:/^fulfillment_availability#1\.quantity$/,
+  leadtime:/^fulfillment_availability#1\.lead_time_to_ship_max_days$/,
+  price:/our_price#1\.schedule#1\.value_with_tax$/,
+  minPrice:/minimum_seller_allowed_price#1\.schedule#1\.value_with_tax$/,
+  maxPrice:/maximum_seller_allowed_price#1\.schedule#1\.value_with_tax$/
+};
+const REQUIRED_FIELDS=["sku","action","extIdType","extId","condition","channel","quantity","price"];
+const FIELD_LABELS={sku:"SKU",action:"Azione",extIdType:"Tipo ID",extId:"EAN",condition:"Condizione",channel:"Canale",quantity:"Quantità",leadtime:"Tempo gestione",price:"Prezzo",minPrice:"Prezzo min",maxPrice:"Prezzo max"};
+const VOCAB={
+  it_IT:{create:"Crea o modifica",ean:"EAN",conditionNew:"Nuovo",channelMerchant:"Gestito dal venditore (default)"},
+  en_GB:{create:"Create or update",ean:"EAN",conditionNew:"New",channelMerchant:"Merchant Fulfilled (default)"},
+  de_DE:{create:"Erstellen oder aktualisieren",ean:"EAN",conditionNew:"Neu",channelMerchant:"Vom Verkäufer versandt (Standard)"},
+  fr_FR:{create:"Créer ou mettre à jour",ean:"EAN",conditionNew:"Neuf",channelMerchant:"Expédié par le vendeur (par défaut)"},
+  es_ES:{create:"Crear o actualizar",ean:"EAN",conditionNew:"Nuevo",channelMerchant:"Gestionado por el vendedor (predeterminado)"}
+};
+function vocabFor(t){return VOCAB[t&&t.contentLanguageTag]||VOCAB.it_IT}
+
+function resolveColumns(t){
+  const attrs=((t.headerRows||[])[(t.attributeRow||5)-1]||[]).map(v=>String(v==null?"":v).trim());
+  const cols={};
+  Object.keys(FIELD_PATTERNS).forEach(f=>{const i=attrs.findIndex(a=>FIELD_PATTERNS[f].test(a));if(i>=0)cols[f]=i;});
+  return{cols,missing:REQUIRED_FIELDS.filter(f=>cols[f]===undefined),attrs};
+}
+function fmtPrice(v,mp){const s=Number(v).toFixed(2);return mp==="UK"?s:s.replace(".",",")}
+
+// Espande i record compatti in righe larghe nCols. qty 0 = riga di disattivazione.
+function expandRecords(records,t,opts){
+  opts=opts||{};
+  const r=resolveColumns(t);
+  if(r.missing.length)throw new Error("Template incompleto: mancano "+r.missing.map(m=>FIELD_LABELS[m]||m).join(", "));
+  const cols=r.cols,voc=vocabFor(t),mp=opts.marketplace||"IT",lead=opts.leadtime,n=t.nCols;
+  return records.map(rec=>{
+    const row=new Array(n).fill("");
+    const put=(f,v)=>{if(cols[f]!==undefined)row[cols[f]]=v};
+    put("sku",rec.sku);put("action",voc.create);put("extIdType",voc.ean);put("extId",rec.ean);
+    put("condition",voc.conditionNew);put("channel",voc.channelMerchant);
+    put("quantity",Number(rec.qty)||0);
+    if(lead!==null&&lead!==undefined&&lead!=="")put("leadtime",Number(lead));
+    put("price",fmtPrice(rec.price,mp));
+    if(rec.minPrice!=null)put("minPrice",fmtPrice(rec.minPrice,mp));
+    if(rec.maxPrice!=null)put("maxPrice",fmtPrice(rec.maxPrice,mp));
+    return row;
+  });
+}
+
+// .txt tab-delimited: equivale al "Salva come → Testo (delimitato da tabulazioni)" di Excel.
+function buildTxt(t,dataRows){
+  const n=t.nCols;
+  const pad=r=>{const a=(r||[]).slice(0,n);while(a.length<n)a.push("");return a};
+  const esc=v=>String(v==null?"":v).replace(/\t/g," ").replace(/\r?\n/g," ");
+  const lines=[];
+  (t.headerRows||[]).forEach(hr=>lines.push(pad(hr).map(esc).join("\t")));
+  dataRows.forEach(dr=>lines.push(pad(dr).map(esc).join("\t")));
+  return lines.join("\r\n")+"\r\n";
+}
+
+// .xlsx costruito a celle sparse: con 140 colonne e migliaia di righe scrivere
+// anche le celle vuote significherebbe oltre un milione di celle inutili.
+function buildXlsx(t,dataRows){
+  if(typeof XLSX==="undefined")throw new Error("Libreria Excel non caricata, ricarica la pagina");
+  const ws={},n=t.nCols;
+  const set=(r,c,v)=>{
+    if(v===""||v===null||v===undefined)return;
+    ws[XLSX.utils.encode_cell({r:r,c:c})]=typeof v==="number"?{t:"n",v:v}:{t:"s",v:String(v)};
+  };
+  const hdr=t.headerRows||[];
+  hdr.forEach((row,ri)=>{for(let c=0;c<n;c++)set(ri,c,row[c])});
+  dataRows.forEach((row,ri)=>{for(let c=0;c<n;c++)set(hdr.length+ri,c,row[c])});
+  ws["!ref"]=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:Math.max(hdr.length+dataRows.length-1,0),c:n-1}});
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,(t.sheetName||"Modello").slice(0,31));
+  return XLSX.write(wb,{bookType:"xlsx",type:"array"});
+}
+
+function dlBlob(data,filename,mime){
+  const b=new Blob([data],{type:mime});
+  const u=URL.createObjectURL(b);
+  const a=document.createElement("a");
+  a.href=u;a.download=filename;document.body.appendChild(a);a.click();
+  document.body.removeChild(a);URL.revokeObjectURL(u);
+}
+
+// Legge le prime 6 righe del foglio "Modello" dal template scaricato da Seller Central.
+async function parseTemplateFile(file){
+  if(typeof XLSX==="undefined")throw new Error("Libreria Excel non caricata, ricarica la pagina");
+  const buf=await file.arrayBuffer();
+  const wb=XLSX.read(buf,{type:"array",sheetRows:6});
+  const sheetName=wb.SheetNames.indexOf("Modello")>=0?"Modello":(wb.SheetNames.find(x=>/model|modello|template|vorlage|plantilla|modèle/i.test(x))||wb.SheetNames[0]);
+  const ws=wb.Sheets[sheetName];
+  if(!ws)throw new Error("Foglio dati non trovato nel file");
+  const aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:"",blankrows:true});
+  while(aoa.length<6)aoa.push([]);
+  const a1=String((aoa[0]||[])[0]||"");
+  if(a1.indexOf("settings=")!==0)throw new Error('La cella A1 non inizia con "settings=": non sembra un template Amazon');
+  const num=(k,d)=>{const m=a1.match(new RegExp(k+"=(\\d+)"));return m?parseInt(m[1],10):d};
+  const str=re=>{const m=a1.match(re);return m?m[1]:null};
+  const labelRow=num("labelRow",4),attributeRow=num("attributeRow",5),dataRow=num("dataRow",7);
+  // nCols = ultima colonna con etichetta o nome campo valorizzato
+  let nCols=0;
+  [labelRow-1,attributeRow-1].forEach(ri=>{
+    const row=aoa[ri]||[];
+    for(let c=row.length-1;c>=0;c--){if(String(row[c]||"").trim()!==""){nCols=Math.max(nCols,c+1);break}}
+  });
+  if(!nCols)throw new Error("Non ho trovato la riga dei nomi campo nel foglio "+sheetName);
+  const pad=r=>{const a=(r||[]).slice(0,nCols).map(v=>v==null?"":String(v));while(a.length<nCols)a.push("");return a};
+  const t={
+    source:file.name,sheetName:sheetName,nCols:nCols,
+    labelRow:labelRow,attributeRow:attributeRow,dataRow:dataRow,
+    marketplaceId:str(/primaryMarketplaceId=amzn1\.mp\.o\.([A-Z0-9]+)/),
+    contentLanguageTag:str(/contentLanguageTag=([a-zA-Z_]+)/),
+    headerRows:[pad(aoa[0]),pad(aoa[1]),pad(aoa[2]),pad(aoa[3]),pad(aoa[4]),pad(aoa[5])]
+  };
+  const rc=resolveColumns(t);
+  if(rc.missing.length)throw new Error("Colonne obbligatorie non trovate: "+rc.missing.map(m=>FIELD_LABELS[m]||m).join(", "));
+  return t;
+}
+
+// Scarica dal server il template completo (righe di intestazione incluse).
+let _templateCache=null;
+async function getFullTemplate(force){
+  if(_templateCache&&!force)return _templateCache;
+  const r=await fetch("/api/template?full=1");
+  if(!r.ok)throw new Error("Template non disponibile (HTTP "+r.status+")");
+  const d=await r.json();
+  if(!d.template)throw new Error("Template non configurato");
+  _templateCache=d.template;
+  return _templateCache;
+}
+
 
 const S={
   card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:14},
@@ -456,141 +654,136 @@ function BlacklistTab({config:c,save}){
   );
 }
 
-// ─── ConvertTab ───────────────────────────────────────────────────────────────
-// Feature: 1) Progress indicator  2) Preview tabella  3) Priorità fornitore
+// ─── ConvertTab (caricamento manuale dei CSV) ────────────────────────────────
+// Percorso di riserva: quando l'FTP non è raggiungibile carichi i CSV a mano.
+// Non applica la disattivazione a quantità 0 (non conosce lo storico delle SKU
+// pubblicate, che vive lato server): produce solo le righe degli articoli attivi.
 
-// Logica di risoluzione duplicati EAN
-// mode="price"    → vince il prezzo più basso (default)
-// mode="priority" → vince il fornitore con priorità più alta (ordine nella lista config)
-//                   a parità di priorità vince il prezzo più basso
-function resolveDuplicate(existing, candidate, mode, supplierPriority){
+function resolveDuplicate(existing,candidate,mode,supplierPriority){
   if(mode==="priority"){
     const pa=supplierPriority[existing.supplier]??999;
     const pb=supplierPriority[candidate.supplier]??999;
-    if(pb<pa)return candidate;   // priorità più alta (numero più basso) vince
-    if(pb===pa&&candidate.price<existing.price)return candidate; // parità → prezzo
+    if(pb<pa)return candidate;
+    if(pb===pa&&candidate.price<existing.price)return candidate;
     return existing;
   }
-  // default: prezzo più basso
   return candidate.price<existing.price?candidate:existing;
 }
 
 function ConvertTab({config:c}){
   const[ups,sUps]=useState({});
   const[mpC,sMpC]=useState(c.marketplaces[0]?.code||"");
-  const[qtyMode,sQtyMode]=useState("catalog");
-  const[dupMode,sDupMode]=useState("price"); // "price" | "priority"
-  const[progress,setProgress]=useState(null); // null | {phase,pct,msg}
-  const[previewRows,setPreviewRows]=useState(20);
-  const[showPreview,setShowPreview]=useState(true);
+  const[qtyMode,sQtyMode]=useState(c.qtyMode||"catalog");
+  const[dupMode,sDupMode]=useState(c.dupMode||"price");
+  const[progress,setProgress]=useState(null);
   const[res,sRes]=useState(null);
   const[saving,setSaving]=useState(false);
 
   const hFile=useCallback((sn,file)=>{if(!file)return;sRes(null);const r=new FileReader();r.onload=e=>{sUps(p=>({...p,[sn]:{fn:file.name,d:e.target.result}}))};r.readAsText(file,"utf-8")},[]);
   const rmUp=n=>{sUps(p=>{const x={...p};delete x[n];return x});sRes(null);};
 
-  // Mappa nome fornitore → indice priorità (0=massima)
   const supplierPriority=Object.fromEntries(c.suppliers.map((s,i)=>[s.name,i]));
 
   const convert=useCallback(()=>{
     const mp=c.marketplaces.find(m=>m.code===mpC);if(!mp)return;
     sRes(null);
-
-    // Usiamo setTimeout per far respirare il browser tra le fasi
     setTimeout(()=>{
       setProgress({phase:1,pct:5,msg:"Lettura file fornitori..."});
       const bl=new Set(c.blacklist);
       const em={};
-      let tR=0,tS=0,dup=0,blk=0;
+      let tR=0,tS=0,badEan=0,dup=0,blk=0,below=0;
       const errs=[];
-      const tierCounts={};const tierPriceSum={};
-      const allEntries=Object.entries(ups);
-      const total=allEntries.length;
+      const tierCounts={},tierPriceSum={};
+      const entries=Object.entries(ups);
+      const total=entries.length;
+      const minStock=Number(c.minStock||0);
+      const maxQty=Number(c.maxQty||0);
+      const floorPct=Number(c.floorMarginPct||0);
 
-      const processSupplier=(idx)=>{
+      const step=idx=>{
         if(idx>=total){
-          // Fase 2: costruzione file
-          setProgress({phase:2,pct:80,msg:"Costruzione file di output..."});
+          setProgress({phase:2,pct:80,msg:"Costruzione righe..."});
           setTimeout(()=>{
-            if(errs.length){sRes({error:errs.join("\n")});setProgress(null);return;}
-            const hd="sku\tproduct-id\tproduct-id-type\tprice\titem-condition\tquantity\tadd-delete\tleadtime-to-ship";
-            const ls=[hd];const sc={};
+            if(errs.length&&Object.keys(em).length===0){sRes({error:errs.join("\n")});setProgress(null);return;}
             const sorted=Object.values(em).sort((a,b)=>a.ean.localeCompare(b.ean));
+            const records=[],previewData=[],sc={};
             let priceSum=0;
-            const previewData=[];
             for(const it of sorted){
-              let ps=it.price.toFixed(2);if(mpC!=="UK")ps=ps.replace(".",",");
-              const qty=qtyMode==="fixed"?String(mp.quantity):(it.stock!==null?String(it.stock):String(mp.quantity));
-              ls.push(it.sku+"\t"+it.ean+"\t4\t"+ps+"\t11\t"+qty+"\ta\t"+mp.leadtime);
+              const raw=qtyMode==="fixed"?Number(mp.quantity):(it.stock!==null?it.stock:Number(mp.quantity));
+              const qty=maxQty>0?Math.min(raw,maxQty):raw;
+              const rec={sku:it.sku,ean:it.ean,qty:qty,price:Math.round(it.price*100)/100};
+              if(floorPct>0)rec.minPrice=Math.round(it.rp*(1+floorPct/100)*100)/100;
+              records.push(rec);
               sc[it.supplier]=(sc[it.supplier]||0)+1;
               tierCounts[it.tierKey]=(tierCounts[it.tierKey]||0)+1;
               tierPriceSum[it.tierKey]=(tierPriceSum[it.tierKey]||0)+it.rp;
               priceSum+=it.rp;
-              if(previewData.length<50)previewData.push({sku:it.sku,ean:it.ean,costPrice:it.rp,salePrice:it.price,supplier:it.supplier,qty,tierKey:it.tierKey});
+              if(previewData.length<50)previewData.push({sku:it.sku,ean:it.ean,costPrice:it.rp,salePrice:it.price,supplier:it.supplier,qty:String(qty),tierKey:it.tierKey,status:"attivo"});
             }
-            const ct=ls.join("\r\n")+"\r\n";
             const avg_price_by_tier={};
-            Object.keys(tierCounts).forEach(k=>{avg_price_by_tier[k]=tierPriceSum[k]/tierCounts[k];});
-            setProgress({phase:3,pct:100,msg:"✓ Completato!"});
+            Object.keys(tierCounts).forEach(k=>{avg_price_by_tier[k]=tierPriceSum[k]/tierCounts[k]});
+            setProgress({phase:3,pct:100,msg:"✓ Completato"});
             setTimeout(()=>{
               setProgress(null);
               sRes({
-                content:ct,total:sorted.length,totalRead:tR,totalSkipped:tS,
-                duplicatesResolved:dup,blacklisted:blk,supplierCounts:sc,previewData,
-                statsPayload:{marketplace:mpC,total_products:sorted.length,total_read:tR,
-                  total_skipped:tS,duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,
-                  by_tier:tierCounts,avg_price_by_tier,avg_price_total:sorted.length>0?priceSum/sorted.length:0}
+                records:records,
+                warnings:errs,
+                stats:{marketplace:mpC,leadtime:mp.leadtime,total_products:sorted.length,total_rows:records.length,
+                  zeroed:0,dropped_from_tracking:0,total_read:tR,total_skipped:tS,bad_ean:badEan,
+                  below_min_stock:below,duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,by_tier:tierCounts,
+                  avg_price_by_tier:avg_price_by_tier,avg_price_total:sorted.length>0?priceSum/sorted.length:0,
+                  errors:errs,previewData:previewData,generated_at:new Date().toISOString()}
               });
-            },400);
+            },300);
           },50);
           return;
         }
-
         const pct=5+Math.round((idx/total)*70);
-        const[sn,up]=allEntries[idx];
-        setProgress({phase:1,pct,msg:`Elaborazione ${sn} (${idx+1}/${total})...`});
-
+        const[sn,up]=entries[idx];
+        setProgress({phase:1,pct,msg:"Elaborazione "+sn+" ("+(idx+1)+"/"+total+")..."});
         setTimeout(()=>{
-          const sup=c.suppliers.find(s=>s.name===sn);if(!sup){processSupplier(idx+1);return;}
+          const sup=c.suppliers.find(s=>s.name===sn);
+          if(!sup){step(idx+1);return;}
           const{h,r}=parseCSV(up.d,sup.delimiter);
+          if(!h.length){errs.push(sn+": CSV vuoto o illeggibile");step(idx+1);return;}
           const skC=fCol(h,sup.skuCol),enC=fCol(h,sup.eanCol),prC=fCol(h,sup.priceCol);
           const stC=sup.stockCol?fCol(h,sup.stockCol):null;
-          if(!skC||!enC||!prC){errs.push(sn+": colonne non trovate: "+[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean).join(", "));processSupplier(idx+1);return;}
-          if(sup.stockCol&&!stC){errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata");processSupplier(idx+1);return;}
+          if(!skC||!enC||!prC){errs.push(sn+": colonne non trovate: "+[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean).join(", "));step(idx+1);return;}
+          if(sup.stockCol&&!stC)errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata, uso la quantità di fallback");
           for(const row of r){
             tR++;
-            const ean=(row[enC]||"").trim(),sku=(row[skC]||"").trim();
+            const ean=normalizeEAN(row[enC]);
+            const sku=(row[skC]||"").trim();
             const rp=parseFloat((row[prC]||"0").replace(",","."));
-            if(!ean||ean.length<8||!sku||isNaN(rp)||rp<=0){tS++;continue;}
+            if(!ean){badEan++;tS++;continue;}
+            if(!sku||isNaN(rp)||rp<=0){tS++;continue;}
             if(bl.has(ean)){blk++;continue;}
+            let stock=null;
+            if(stC){
+              const parsed=parseInt(String(row[stC]||"").replace(/[^\d-]/g,""),10);
+              stock=Number.isFinite(parsed)?Math.max(0,parsed):0;
+            }
+            if(stock!==null&&minStock>0&&stock<minStock){below++;continue;}
             const tiers=sup.tiers||[];
-            const tierIdx=tiers.findIndex(t=>t.upTo===null||rp<=t.upTo);
-            const tierKey=tiers[tierIdx]?.upTo===null?`>${tiers[tierIdx-1]?.upTo??0}€`:`≤${tiers[tierIdx]?.upTo}€`;
-            const fp=applyTiers(rp,tiers);
-            const stock=stC?parseInt(row[stC])||0:null;
-            const candidate={sku,ean,price:fp,supplier:sn,stock,tierKey,rp};
+            const candidate={sku,ean,price:applyTiers(rp,tiers),supplier:sn,stock,tierKey:tierKeyFor(rp,tiers),rp};
             if(em[ean]){dup++;em[ean]=resolveDuplicate(em[ean],candidate,dupMode,supplierPriority);}
             else em[ean]=candidate;
           }
-          processSupplier(idx+1);
+          step(idx+1);
         },10);
       };
-      processSupplier(0);
+      step(0);
     },30);
   },[ups,mpC,qtyMode,dupMode,c]);
 
-  const dl=()=>{
-    if(!res?.content)return;
-    const b=new Blob([res.content],{type:"text/plain;charset=utf-8"});
-    const u=URL.createObjectURL(b);const a=document.createElement("a");
-    a.href=u;a.download="InventoryLoader_merged_"+mpC+"_"+new Date().toISOString().slice(0,10)+".txt";
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);
-  };
-
   const saveToHistory=async()=>{
-    if(!res?.statsPayload)return;setSaving(true);
-    try{const r=await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(res.statsPayload)});if(!r.ok)throw new Error(`HTTP ${r.status}`);alert("✓ Salvato nello storico!");}
-    catch(e){alert("Errore: "+e.message);}finally{setSaving(false);}
+    if(!res?.stats)return;setSaving(true);
+    try{
+      const r=await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...res.stats,source:"manuale"})});
+      if(!r.ok)throw new Error("HTTP "+r.status);
+      alert("✓ Salvato nello storico");
+    }catch(e){alert("Errore: "+e.message)}
+    finally{setSaving(false)}
   };
 
   if(!c.suppliers.length||!c.marketplaces.length)return<Card><p style={{color:"#f59e0b",textAlign:"center",margin:0}}>⚠️ Configura almeno un fornitore e un marketplace.</p></Card>;
@@ -598,40 +791,27 @@ function ConvertTab({config:c}){
 
   return(
     <div>
-      {/* Marketplace */}
-      <Card><Sel label="Marketplace di destinazione" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null);}} options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/></Card>
-
-      {/* Quantità */}
-      <Card>
-        <label style={S.label}>Sorgente quantità</label>
-        <div style={{display:"flex",gap:12,marginTop:6}}>
-          {[{v:"catalog",l:"📦 Dal catalogo",d:"Usa la colonna stock del fornitore"},{v:"fixed",l:"🔒 Fissa",d:"Usa la quantità del marketplace"}].map(o=>(
-            <div key={o.v} onClick={()=>{sQtyMode(o.v);sRes(null);}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:qtyMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:qtyMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
-              <div style={{fontWeight:600,fontSize:14,color:qtyMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
-              <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
-            </div>
-          ))}
+      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
+        <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+          <strong>Percorso di riserva.</strong> Da qui carichi i CSV a mano quando l'FTP non risponde.
+          A differenza del tab 🤖 Auto, questo file contiene solo gli articoli disponibili: non aggiunge le
+          righe a quantità 0 per gli articoli spariti dal listino, perché lo storico delle SKU pubblicate
+          vive lato server. Per la sincronizzazione quotidiana usa il tab Auto.
         </div>
       </Card>
 
-      {/* ── FEATURE 3: Modalità duplicati ── */}
       <Card>
-        <label style={S.label}>Quando lo stesso EAN è presente in più fornitori</label>
-        <div style={{display:"flex",gap:12,marginTop:6}}>
-          {[
-            {v:"price",l:"💰 Prezzo più basso vince",d:"Sceglie sempre l'offerta con prezzo finale minore"},
-            {v:"priority",l:"⭐ Priorità fornitore",d:`Vince il fornitore con priorità più alta. Ordine attuale: ${c.suppliers.map(s=>s.name).join(" → ") || "—"}`}
-          ].map(o=>(
-            <div key={o.v} onClick={()=>{sDupMode(o.v);sRes(null);}} style={{flex:1,padding:"12px 16px",borderRadius:10,border:dupMode===o.v?"2px solid #6366f1":"2px solid var(--border)",background:dupMode===o.v?"var(--bg-card)":"var(--bg-input)",cursor:"pointer",transition:"all .15s"}}>
-              <div style={{fontWeight:600,fontSize:14,color:dupMode===o.v?"var(--accent-form)":"var(--text-label)"}}>{o.l}</div>
-              <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>{o.d}</div>
-            </div>
-          ))}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+          <Sel label="Marketplace" value={mpC} onChange={e=>{sMpC(e.target.value);sRes(null);}}
+            options={c.marketplaces.map(m=>({v:m.code,l:(EU_MP.find(x=>x.code===m.code)||{}).name||m.code}))}/>
+          <Sel label="Sorgente quantità" value={qtyMode} onChange={e=>{sQtyMode(e.target.value);sRes(null);}}
+            options={[{v:"catalog",l:"📦 Stock fornitore"},{v:"fixed",l:"🔒 Quantità fissa"}]}/>
+          <Sel label="EAN duplicati" value={dupMode} onChange={e=>{sDupMode(e.target.value);sRes(null);}}
+            options={[{v:"price",l:"💰 Prezzo più basso"},{v:"priority",l:"⭐ Priorità fornitore"}]}/>
         </div>
-        {dupMode==="priority"&&<p style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>💡 La priorità segue l'ordine dei fornitori nella tab 🏭 Fornitori. Trascina o riordina lì per cambiare la precedenza.</p>}
+        {dupMode==="priority"&&<p style={{fontSize:11,color:"var(--text-muted)",margin:0}}>💡 La priorità segue l'ordine nel tab 🏭 Fornitori: {c.suppliers.map(s=>s.name).join(" → ")||"—"}</p>}
       </Card>
 
-      {/* Carica file */}
       <div style={{marginBottom:14}}>
         <label style={{...S.label,marginBottom:10}}>Carica i cataloghi fornitori</label>
         {c.suppliers.map((sup,si)=>{const u=ups[sup.name];return(
@@ -640,7 +820,7 @@ function ConvertTab({config:c}){
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 {dupMode==="priority"&&<span style={{background:"var(--badge-neutral)",color:"var(--text)",borderRadius:6,padding:"1px 7px",fontSize:11,fontWeight:700}}>#{si+1}</span>}
                 <strong style={{color:"var(--text)",fontSize:14}}>{sup.name}</strong>
-                <span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{sup.tiers?`${sup.tiers.length} fasce`:"flat"}</span>
+                <span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{sup.tiers?sup.tiers.length+" fasce":"flat"}</span>
                 {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
               </div>
               {u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}
@@ -655,15 +835,13 @@ function ConvertTab({config:c}){
         );})}
       </div>
 
-      {/* Bottone genera */}
       <div style={{textAlign:"center",marginBottom:14}}>
         <Btn v="ok" onClick={convert} disabled={uc===0||!!progress} style={{padding:"12px 40px",fontSize:15}}>
-          {progress?"⏳ Elaborazione...":"⚡ Genera file unificato"}
-          {!progress&&` (${uc} ${uc===1?"fornitore":"fornitori"})`}
+          {progress?"⏳ Elaborazione...":"⚡ Genera file"}
+          {!progress&&" ("+uc+" "+(uc===1?"fornitore":"fornitori")+")"}
         </Btn>
       </div>
 
-      {/* ── FEATURE 1: Progress bar ── */}
       {progress&&(
         <Card accent="#6366f1">
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -671,98 +849,25 @@ function ConvertTab({config:c}){
             <span style={{fontSize:12,color:"var(--accent-form)",fontWeight:700}}>{progress.pct}%</span>
           </div>
           <div style={{background:"var(--bg-input)",borderRadius:6,height:8,overflow:"hidden"}}>
-            <div style={{height:"100%",width:`${progress.pct}%`,background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:6,transition:"width .3s ease"}}/>
+            <div style={{height:"100%",width:progress.pct+"%",background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:6,transition:"width .3s ease"}}/>
           </div>
-          <p style={{fontSize:11,color:"var(--text-muted)",marginTop:6}}>Fase {progress.phase}/3 — il browser rimane responsivo durante l'elaborazione</p>
         </Card>
       )}
 
       {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
 
-      {res?.content&&(
+      {res?.records&&(
         <div>
-          {/* Riepilogo KPI */}
           <Card accent="#10b981">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
               <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <Btn v="ok" onClick={dl} style={{fontSize:14}}>↓ Scarica .txt</Btn>
-                <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>
-                  {saving?"Salvataggio...":"📊 Salva nello storico"}
-                </Btn>
-              </div>
+              <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>{saving?"Salvataggio...":"📊 Salva nello storico"}</Btn>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-              {[["Prodotti",res.total],["Righe lette",res.totalRead],["Scartate",res.totalSkipped],["Duplicati risolti",res.duplicatesResolved],["Blacklist",res.blacklisted]].map(([l,v])=>(
-                <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-                  <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{v.toLocaleString()}</div>
-                  <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
-                </div>
-              ))}
-            </div>
-            <label style={{...S.label,marginBottom:8}}>Per fornitore vincente</label>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {Object.entries(res.supplierCounts).map(([n,ct])=>(
-                <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-                  <strong style={{color:"var(--text)",fontSize:13}}>{n}</strong>
-                  <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
-                </div>
-              ))}
-            </div>
+            <DownloadBox records={res.records} stats={res.stats} label={res.records.length.toLocaleString()+" righe"}/>
+            <div style={{height:14}}/>
+            <StatsBlock stats={res.stats}/>
           </Card>
-
-          {/* ── FEATURE 2: Anteprima tabella ── */}
-          {res.previewData&&res.previewData.length>0&&(
-            <Card>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                <h4 style={{margin:0,fontSize:14,color:"var(--text)"}}>
-                  👁 Anteprima prime {Math.min(previewRows,res.previewData.length)} righe
-                  <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12,marginLeft:8}}>su {res.total.toLocaleString()} totali</span>
-                </h4>
-                <Btn v="ghost" onClick={()=>setShowPreview(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>
-                  {showPreview?"Nascondi":"Mostra"}
-                </Btn>
-              </div>
-              {showPreview&&(
-                <div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead>
-                        <tr style={{borderBottom:"2px solid var(--border)"}}>
-                          {["EAN","SKU","Fascia","Costo (€)","Vendita (€)","Netto est.","Fornitore","Qty"].map(h=>(
-                            <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {res.previewData.slice(0,previewRows).map((row,i)=>{
-                          const net=(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2);
-                          const netColor=parseFloat(net)>0?"#10b981":"#ef4444";
-                          return(
-                            <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)"}}>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.costPrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{row.salePrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:netColor}}>{net}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  {res.previewData.length>previewRows&&(
-                    <div style={{textAlign:"center",marginTop:10}}>
-                      <Btn v="ghost" onClick={()=>setPreviewRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20 righe</Btn>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          )}
+          <PreviewTable previewData={res.stats.previewData} total={res.stats.total_rows}/>
         </div>
       )}
     </div>
@@ -779,218 +884,524 @@ function AlertBell({onClick,count}){
   );
 }
 
-// ─── Auto Tab (FTP fetch + file pronto) ──────────────────────────────────────
-function AutoTab(){
-  const[status,setStatus]=useState(null); // null | loading | ready | error
-  const[result,setResult]=useState(null);
-  const[generating,setGenerating]=useState(false);
-  const[marketplace,setMarketplace]=useState("IT");
-  const[dupMode,setDupMode]=useState("price");
-  const[previewRows,setPreviewRows]=useState(20);
-  const[showPreview,setShowPreview]=useState(true);
-  const[saving,setSaving]=useState(false);
+// ─── Blocco download (.xlsx + .txt) ──────────────────────────────────────────
+function DownloadBox({records,stats,filename,label,accent}){
+  const[busy,setBusy]=useState(null);
+  const[err,setErr]=useState(null);
 
-  // Carica l'ultimo risultato già pronto
-  const loadLatest=async()=>{
-    setStatus("loading");
+  const make=async(kind)=>{
+    setBusy(kind);setErr(null);
     try{
-      const r=await fetch("/api/ftp-convert");
-      if(!r.ok)throw new Error(`HTTP ${r.status}`);
-      const data=await r.json();
-      if(data){setResult(data);setStatus("ready");}
-      else{setStatus(null);}
-    }catch(e){setStatus("error");console.error(e);}
-  };
-
-  useEffect(()=>{loadLatest();},[]);
-
-  const generate=async()=>{
-    setGenerating(true);setResult(null);
-    try{
-      const r=await fetch("/api/ftp-convert",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({marketplace,dupMode})
-      });
-      const data=await r.json();
-      if(!r.ok)throw new Error(data.error||`HTTP ${r.status}`);
-      await loadLatest();
-    }catch(e){
-      setStatus("error");
-      setResult({error:e.message});
-    }finally{setGenerating(false);}
-  };
-
-  const dl=()=>{
-    if(!result?.fileContent)return;
-    const b=new Blob([result.fileContent],{type:"text/plain;charset=utf-8"});
-    const u=URL.createObjectURL(b);const a=document.createElement("a");
-    a.href=u;a.download=result.filename||"inventory.txt";
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);
-  };
-
-  const saveToHistory=async()=>{
-    if(!result?.stats)return;setSaving(true);
-    try{
-      await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(result.stats)});
-      alert("✓ Salvato nello storico!");
-    }catch(e){alert("Errore: "+e.message);}
-    finally{setSaving(false);}
-  };
-
-  const fmtDate=iso=>{
-    if(!iso)return"—";
-    return new Date(iso).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+      const t=await getFullTemplate();
+      const rows=expandRecords(records,t,{marketplace:stats.marketplace,leadtime:stats.leadtime});
+      const base=filename||("Offerte_"+(stats.marketplace||"IT")+"_"+new Date().toISOString().slice(0,10));
+      if(kind==="xlsx"){
+        const buf=buildXlsx(t,rows);
+        dlBlob(buf,base+".xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      }else{
+        dlBlob(buildTxt(t,rows),base+".txt","text/plain;charset=utf-8");
+      }
+    }catch(e){setErr(e.message)}
+    finally{setBusy(null)}
   };
 
   return(
     <div>
-      {/* Info scheduled */}
-      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
-        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-          <span style={{fontSize:24}}>🤖</span>
-          <div>
-            <div style={{fontWeight:700,color:"var(--info-text)",marginBottom:4}}>Generazione automatica attiva</div>
-            <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
-              Ogni mattina alle <strong>9:15</strong> (Lun–Sab) il sistema scarica automaticamente i CSV dall'FTP, 
-              esegue la conversione e tiene il file pronto qui. Voi aprite il sito, cliccate Scarica, caricate su Amazon. Fine.
-            </div>
-          </div>
-        </div>
-      </Card>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+        <Btn v={accent||"ok"} onClick={()=>make("xlsx")} disabled={!!busy} style={{fontSize:14,padding:"10px 22px"}}>
+          {busy==="xlsx"?"⏳ Genero...":"↓ Scarica .xlsx"}
+        </Btn>
+        <Btn v="ghost" onClick={()=>make("txt")} disabled={!!busy} style={{fontSize:13}}>
+          {busy==="txt"?"⏳...":"↓ .txt tab-delimited"}
+        </Btn>
+        {label&&<span style={{fontSize:11,color:"var(--text-muted)"}}>{label}</span>}
+      </div>
+      {err&&<p style={{color:"#ef4444",fontSize:12,margin:"8px 0 0"}}>❌ {err}</p>}
+    </div>
+  );
+}
 
-      {/* Controlli manuali */}
-      <Card>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-          <div>
-            <label style={S.label}>Marketplace</label>
-            <select value={marketplace} onChange={e=>setMarketplace(e.target.value)} style={S.input}>
-              {[{v:"IT",l:"Amazon.it"},{v:"DE",l:"Amazon.de"},{v:"FR",l:"Amazon.fr"},{v:"ES",l:"Amazon.es"}].map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={S.label}>Risoluzione duplicati EAN</label>
-            <select value={dupMode} onChange={e=>setDupMode(e.target.value)} style={S.input}>
-              <option value="price">💰 Prezzo più basso</option>
-              <option value="priority">⭐ Priorità fornitore</option>
-            </select>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <Btn v="pri" onClick={generate} disabled={generating} style={{fontSize:14,padding:"10px 24px"}}>
-            {generating?"⏳ Scaricando dall'FTP...":"📥 Genera adesso da FTP"}
-          </Btn>
-          <Btn v="ghost" onClick={loadLatest} style={{fontSize:13}}>↻ Ricarica</Btn>
-          <span style={{fontSize:11,color:"var(--text-muted)"}}>oppure aspetta la generazione automatica delle 9:15</span>
-        </div>
-      </Card>
-
-      {/* Errore */}
-      {result?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0}}>❌ {result.error}</p></Card>}
-
-      {/* File pronto */}
-      {status==="ready"&&result?.stats&&(
+// ─── Anteprima righe ─────────────────────────────────────────────────────────
+function PreviewTable({previewData,total}){
+  const[rows,setRows]=useState(20);
+  const[show,setShow]=useState(true);
+  if(!previewData||!previewData.length)return null;
+  return(
+    <Card>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <h4 style={{margin:0,fontSize:14}}>👁 Anteprima <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12}}>prime {Math.min(rows,previewData.length)} di {(total||0).toLocaleString()}</span></h4>
+        <Btn v="ghost" onClick={()=>setShow(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>{show?"Nascondi":"Mostra"}</Btn>
+      </div>
+      {show&&(
         <div>
-          <Card accent="#10b981">
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
-              <div>
-                <h4 style={{color:"#10b981",margin:"0 0 4px"}}>✓ File pronto</h4>
-                <div style={{fontSize:12,color:"var(--text-muted)"}}>Generato il {fmtDate(result.stats.generated_at)} • {result.filename}</div>
-              </div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <Btn v="ok" onClick={dl} style={{fontSize:14,padding:"10px 24px"}}>↓ Scarica .txt</Btn>
-                <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>
-                  {saving?"Salvataggio...":"📊 Salva nello storico"}
-                </Btn>
-              </div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{borderBottom:"2px solid var(--border)"}}>
+                  {["EAN","SKU","Fascia","Costo €","Vendita €","Netto est.","Fornitore","Qty","Stato"].map(h=>(
+                    <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {previewData.slice(0,rows).map((row,i)=>{
+                  const hasCost=row.costPrice!=null;
+                  const net=hasCost?(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2):null;
+                  const zero=row.qty==="0"||row.status==="disattivata";
+                  return(
+                    <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)",opacity:zero?0.6:1}}>
+                      <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
+                      <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
+                      <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
+                      <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{hasCost?row.costPrice.toFixed(2):"—"}</td>
+                      <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{Number(row.salePrice||0).toFixed(2)}</td>
+                      <td style={{padding:"5px 10px",fontWeight:600,color:net!==null&&parseFloat(net)>0?"#10b981":"#ef4444"}}>{net===null?"—":net}</td>
+                      <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
+                      <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
+                      <td style={{padding:"5px 10px"}}>
+                        <span style={{...S.badge(zero?"var(--bl-bg)":"var(--badge-ok)"),fontSize:10,color:zero?"var(--bl-text)":"var(--text)"}}>{zero?"disattivata":"attiva"}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {previewData.length>rows&&(
+            <div style={{textAlign:"center",marginTop:10}}>
+              <Btn v="ghost" onClick={()=>setRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20</Btn>
             </div>
-
-            {/* KPI */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:14}}>
-              {[
-                ["Prodotti",result.stats.total_products],
-                ["Righe lette",result.stats.total_read],
-                ["Scartate",result.stats.total_skipped],
-                ["Duplicati",result.stats.duplicates_resolved],
-                ["Blacklist",result.stats.blacklisted],
-              ].map(([l,v])=>(
-                <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-                  <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
-                  <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Per fornitore */}
-            {result.stats.by_supplier&&(
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {Object.entries(result.stats.by_supplier).map(([n,ct])=>(
-                  <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-                    <strong style={{fontSize:13}}>{n}</strong>
-                    <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Errori CSV se presenti */}
-            {result.stats.errors?.length>0&&(
-              <div style={{marginTop:12,padding:"8px 12px",background:"var(--bl-bg)",borderRadius:8,border:"1px solid var(--bl-border)"}}>
-                {result.stats.errors.map((e,i)=><div key={i} style={{fontSize:12,color:"var(--bl-text)"}}>{e}</div>)}
-              </div>
-            )}
-          </Card>
-
-          {/* Anteprima */}
-          {result.stats.previewData?.length>0&&(
-            <Card>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                <h4 style={{margin:0,fontSize:14}}>👁 Anteprima <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:12}}>prime {Math.min(previewRows,result.stats.previewData.length)} di {result.stats.total_products.toLocaleString()}</span></h4>
-                <Btn v="ghost" onClick={()=>setShowPreview(p=>!p)} style={{fontSize:11,padding:"4px 10px"}}>{showPreview?"Nascondi":"Mostra"}</Btn>
-              </div>
-              {showPreview&&(
-                <div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead>
-                        <tr style={{borderBottom:"2px solid var(--border)"}}>
-                          {["EAN","SKU","Fascia","Costo €","Vendita €","Netto est.","Fornitore","Qty"].map(h=>(
-                            <th key={h} style={{textAlign:"left",padding:"6px 10px",color:"var(--text-label)",fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {result.stats.previewData.slice(0,previewRows).map((row,i)=>{
-                          const net=(row.salePrice-row.salePrice*0.08-row.costPrice).toFixed(2);
-                          return(
-                            <tr key={i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"transparent":"var(--bg-input)"}}>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11,color:"var(--text-muted)"}}>{row.ean}</td>
-                              <td style={{padding:"5px 10px",fontFamily:"monospace",fontSize:11}}>{row.sku}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.costPrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{row.salePrice.toFixed(2)}</td>
-                              <td style={{padding:"5px 10px",fontWeight:600,color:parseFloat(net)>0?"#10b981":"#ef4444"}}>{net}</td>
-                              <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
-                              <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  {result.stats.previewData.length>previewRows&&(
-                    <div style={{textAlign:"center",marginTop:10}}>
-                      <Btn v="ghost" onClick={()=>setPreviewRows(n=>n+20)} style={{fontSize:12}}>Mostra altre 20</Btn>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
           )}
         </div>
       )}
+    </Card>
+  );
+}
 
-      {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento...</p></Card>}
+// ─── KPI ─────────────────────────────────────────────────────────────────────
+function KpiRow({items}){
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(115px,1fr))",gap:10,marginBottom:14}}>
+      {items.map(([l,v,hint])=>(
+        <div key={l} title={hint||""} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+          <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
+          <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StatsBlock({stats}){
+  return(
+    <div>
+      <KpiRow items={[
+        ["Attivi",stats.total_products,"Prodotti disponibili dal fornitore"],
+        ["Disattivati",stats.zeroed,"SKU già pubblicate e oggi assenti dal listino: escono con quantità 0"],
+        ["Righe file",stats.total_rows,"Totale righe nel file da caricare"],
+        ["Righe lette",stats.total_read],
+        ["Scartate",stats.total_skipped],
+      ]}/>
+      <KpiRow items={[
+        ["EAN non validi",stats.bad_ean,"Codici non numerici, lunghezza errata o cifra di controllo sbagliata"],
+        ["Sotto soglia",stats.below_min_stock,"Esclusi perché lo stock fornitore è sotto la soglia minima"],
+        ["Duplicati",stats.duplicates_resolved],
+        ["Blacklist",stats.blacklisted],
+        ["Non più tracciate",stats.dropped_from_tracking,"SKU a zero da più giorni del limite: smettiamo di ripeterle"],
+      ]}/>
+      {stats.by_supplier&&Object.keys(stats.by_supplier).length>0&&(
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+          {Object.entries(stats.by_supplier).map(([n,ct])=>(
+            <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+              <strong style={{fontSize:13}}>{n}</strong>
+              <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {stats.errors&&stats.errors.length>0&&(
+        <div style={{marginTop:12,padding:"8px 12px",background:"var(--bl-bg)",borderRadius:8,border:"1px solid var(--bl-border)"}}>
+          {stats.errors.map((e,i)=><div key={i} style={{fontSize:12,color:"var(--bl-text)"}}>{e}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Template Tab ────────────────────────────────────────────────────────────
+function TemplateTab(){
+  const[info,setInfo]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const[busy,setBusy]=useState(false);
+  const[msg,setMsg]=useState(null);
+  const[err,setErr]=useState(null);
+
+  const load=async()=>{
+    setLoading(true);setErr(null);
+    try{const r=await fetch("/api/template");const d=await r.json();setInfo(d.info);}
+    catch(e){setErr(e.message)}
+    finally{setLoading(false)}
+  };
+  useEffect(()=>{load()},[]);
+
+  const upload=async(file)=>{
+    if(!file)return;
+    setBusy(true);setErr(null);setMsg(null);
+    try{
+      const t=await parseTemplateFile(file);
+      const r=await fetch("/api/template",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+      _templateCache=null;
+      setInfo(d.info);
+      setMsg("Template aggiornato: "+t.nCols+" colonne, dati dalla riga "+t.dataRow+".");
+    }catch(e){setErr(e.message)}
+    finally{setBusy(false)}
+  };
+
+  const reset=async()=>{
+    if(!confirm("Tornare al template di default incluso nell'app?"))return;
+    setBusy(true);setErr(null);setMsg(null);
+    try{
+      const r=await fetch("/api/template",{method:"DELETE"});
+      const d=await r.json();
+      _templateCache=null;setInfo(d.info);setMsg("Ripristinato il template di default.");
+    }catch(e){setErr(e.message)}
+    finally{setBusy(false)}
+  };
+
+  if(loading)return<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Caricamento...</p></Card>;
+
+  const ok=info&&(!info.missing||info.missing.length===0);
+
+  return(
+    <div>
+      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:24}}>📄</span>
+          <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+            <div style={{fontWeight:700,marginBottom:4}}>Modello di caricamento delle offerte</div>
+            Amazon ha sostituito l'Inventory Loader classico con questo formato: la riga 1 contiene la stringa
+            di configurazione, la riga 5 i nomi tecnici dei campi, i dati partono dalla riga 7.
+            Il file generato riproduce le intestazioni del template che carichi qui.
+            <div style={{marginTop:6}}>
+              Quando Amazon rilascia una nuova versione, scaricala da <em>Catalogo → Aggiungi prodotti tramite
+              caricamento → Scarica un foglio di calcolo</em> e caricala qui: le colonne vengono rilevate
+              automaticamente, non serve toccare il codice.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card accent={ok?"#10b981":"#ef4444"}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
+          <div>
+            <h4 style={{margin:"0 0 4px",color:ok?"#10b981":"#ef4444"}}>{ok?"✓ Template valido":"⚠️ Template incompleto"}</h4>
+            <div style={{fontSize:12,color:"var(--text-muted)"}}>
+              {info.isSeed?"Default incluso nell'app":"Caricato da te"}
+              {info.source?" • "+info.source:""}
+              {info.uploadedAt?" • "+new Date(info.uploadedAt).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}):""}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
+              {busy?"⏳ Elaboro...":"⬆ Carica template Amazon"}
+              <input type="file" accept=".xlsm,.xlsx,.xls" style={{display:"none"}} disabled={busy} onChange={e=>upload(e.target.files[0])}/>
+            </label>
+            {!info.isSeed&&<Btn v="ghost" onClick={reset} disabled={busy} style={{fontSize:13}}>Ripristina default</Btn>}
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
+          {[["Colonne",info.nCols],["Riga dati",info.dataRow],["Riga campi",info.attributeRow],["Marketplace",info.marketplaceId||"—"],["Lingua",info.contentLanguageTag||"—"],["Foglio",info.sheetName]].map(([l,v])=>(
+            <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
+              <div style={{fontSize:15,fontWeight:700,color:"var(--text)"}}>{v}</div>
+              <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+            </div>
+          ))}
+        </div>
+
+        <label style={{...S.label,margin:"16px 0 8px"}}>Campi riconosciuti</label>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {Object.keys(FIELD_LABELS).map(f=>{
+            const found=(info.resolved||[]).indexOf(f)>=0;
+            const req=REQUIRED_FIELDS.indexOf(f)>=0;
+            return(
+              <span key={f} style={{...S.badge(found?"var(--badge-ok)":(req?"var(--bl-bg)":"var(--badge-neutral)")),fontSize:11,color:found?"var(--text)":(req?"var(--bl-text)":"var(--text-muted)")}}>
+                {found?"✓":"✕"} {FIELD_LABELS[f]}{req?"":" (opz.)"}
+              </span>
+            );
+          })}
+        </div>
+
+        {info.missing&&info.missing.length>0&&(
+          <div style={{marginTop:12,padding:"8px 12px",background:"var(--bl-bg)",borderRadius:8,border:"1px solid var(--bl-border)",fontSize:12,color:"var(--bl-text)"}}>
+            Mancano campi obbligatori: {info.missing.map(m=>FIELD_LABELS[m]||m).join(", ")}. Carica un template completo.
+          </div>
+        )}
+      </Card>
+
+      {msg&&<Card accent="#10b981"><p style={{color:"#10b981",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
+      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13}}>❌ {err}</p></Card>}
+    </div>
+  );
+}
+
+// ─── Regole Tab ──────────────────────────────────────────────────────────────
+function RulesTab({config:c,save}){
+  const[f,sF]=useState({
+    qtyMode:c.qtyMode||"catalog",
+    dupMode:c.dupMode||"price",
+    minStock:c.minStock??0,
+    maxQty:c.maxQty??0,
+    floorMarginPct:c.floorMarginPct??0,
+    zeroKeepDays:c.zeroKeepDays??90,
+    maxDeltaPct:c.maxDeltaPct??20,
+    minProducts:c.minProducts??100,
+  });
+  const[saved,setSaved]=useState(false);
+  const num=(k,v)=>sF(p=>({...p,[k]:v===""?"":Number(v)}));
+
+  const apply=()=>{
+    save({...c,...f,
+      minStock:Number(f.minStock)||0,maxQty:Number(f.maxQty)||0,
+      floorMarginPct:Number(f.floorMarginPct)||0,zeroKeepDays:Number(f.zeroKeepDays)||90,
+      maxDeltaPct:Number(f.maxDeltaPct)||20,minProducts:Number(f.minProducts)||100});
+    setSaved(true);setTimeout(()=>setSaved(false),2500);
+  };
+
+  return(
+    <div>
+      <Card>
+        <h4 style={{margin:"0 0 4px",fontSize:15}}>📦 Disponibilità</h4>
+        <p style={{fontSize:12,color:"var(--text-muted)",margin:"0 0 14px",lineHeight:1.6}}>
+          Con un aggiornamento al giorno, la quantità che pubblichi resta esposta per 24 ore.
+          Il tasso di annullamento Amazon si misura su 7 giorni con soglia 2,5%: a 40 ordini a settimana
+          basta un ordine non evadibile per superarla.
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          <Sel label="Sorgente quantità" value={f.qtyMode} onChange={e=>sF(p=>({...p,qtyMode:e.target.value}))}
+            options={[{v:"catalog",l:"📦 Stock del fornitore"},{v:"fixed",l:"🔒 Quantità fissa del marketplace"}]}/>
+          <Sel label="EAN presente in più fornitori" value={f.dupMode} onChange={e=>sF(p=>({...p,dupMode:e.target.value}))}
+            options={[{v:"price",l:"💰 Prezzo più basso"},{v:"priority",l:"⭐ Priorità fornitore"}]}/>
+          <Inp label="Stock minimo per pubblicare" type="number" min="0" value={f.minStock} onChange={e=>num("minStock",e.target.value)}/>
+          <Inp label="Tetto quantità pubblicata (0 = nessuno)" type="number" min="0" value={f.maxQty} onChange={e=>num("maxQty",e.target.value)}/>
+        </div>
+        <p style={{fontSize:11,color:"var(--text-muted)",margin:0,lineHeight:1.6}}>
+          <strong>Stock minimo</strong>: sotto questa soglia l'articolo non viene pubblicato. È nella coda lunga di
+          articoli quasi esauriti che nascono quasi tutti gli annullamenti.<br/>
+          <strong>Tetto quantità</strong>: pubblicare 4 invece di 400 limita l'esposizione massima a un singolo ciclo
+          di aggiornamento, senza perdere vendite reali.
+        </p>
+      </Card>
+
+      <Card>
+        <h4 style={{margin:"0 0 4px",fontSize:15}}>🚦 Disattivazione</h4>
+        <p style={{fontSize:12,color:"var(--text-muted)",margin:"0 0 14px",lineHeight:1.6}}>
+          Le SKU già pubblicate e oggi assenti dal listino fornitore escono con <strong>quantità 0</strong>:
+          l'offerta resta a catalogo, non è acquistabile, e si riattiva da sola quando torna disponibile.
+          Non serve più il "Modifica e sostituisci".
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          <Inp label="Giorni di ripetizione della quantità 0" type="number" min="1" value={f.zeroKeepDays} onChange={e=>num("zeroKeepDays",e.target.value)}/>
+          <Inp label="Margine minimo % per il prezzo minimo (0 = non inviarlo)" type="number" min="0" value={f.floorMarginPct} onChange={e=>num("floorMarginPct",e.target.value)}/>
+        </div>
+        <p style={{fontSize:11,color:"var(--text-muted)",margin:0,lineHeight:1.6}}>
+          Passati i giorni indicati, la SKU esce dal tracciamento e non viene più inserita nel file
+          (resta comunque a zero su Amazon fino a una cancellazione esplicita).
+        </p>
+      </Card>
+
+      <Card accent="#f59e0b">
+        <h4 style={{margin:"0 0 4px",fontSize:15}}>🛡 Controllo di sicurezza</h4>
+        <p style={{fontSize:12,color:"var(--text-muted)",margin:"0 0 14px",lineHeight:1.6}}>
+          Se il CSV del fornitore arriva troncato o incompleto, il risultato viene messo in
+          quarantena e l'ultimo file buono non viene sovrascritto. Trovi il pulsante per confermarlo
+          a mano nel tab 🤖 Auto.
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          <Inp label="Variazione massima prodotti (%)" type="number" min="1" value={f.maxDeltaPct} onChange={e=>num("maxDeltaPct",e.target.value)}/>
+          <Inp label="Prodotti minimi attesi" type="number" min="1" value={f.minProducts} onChange={e=>num("minProducts",e.target.value)}/>
+        </div>
+      </Card>
+
+      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+        <Btn v="ok" onClick={apply} style={{padding:"10px 24px",fontSize:14}}>💾 Salva regole</Btn>
+        {saved&&<span style={{color:"#10b981",fontSize:13}}>✓ Salvato</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Auto Tab (FTP + file pronto) ────────────────────────────────────────────
+function AutoTab({config:c}){
+  const[status,setStatus]=useState("loading"); // loading | ready | empty | error
+  const[latest,setLatest]=useState(null);
+  const[pending,setPending]=useState(null);
+  const[tinfo,setTinfo]=useState(null);
+  const[generating,setGenerating]=useState(false);
+  const[acting,setActing]=useState(false);
+  const[err,setErr]=useState(null);
+  const[note,setNote]=useState(null);
+  const[saving,setSaving]=useState(false);
+  const[view,setView]=useState("latest"); // latest | pending
+
+  const load=async()=>{
+    setStatus("loading");setErr(null);
+    try{
+      const[r1,r2]=await Promise.all([fetch("/api/ftp-convert"),fetch("/api/template")]);
+      if(!r1.ok)throw new Error("HTTP "+r1.status);
+      const d=await r1.json();
+      setLatest(d.latest||null);setPending(d.pending||null);
+      if(r2.ok){const t=await r2.json();setTinfo(t.info);}
+      setView(d.pending?"pending":"latest");
+      setStatus(d.latest||d.pending?"ready":"empty");
+    }catch(e){setErr(e.message);setStatus("error")}
+  };
+  useEffect(()=>{load()},[]);
+
+  const generate=async(force)=>{
+    setGenerating(true);setErr(null);setNote(null);
+    try{
+      const r=await fetch("/api/ftp-convert",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({marketplace:c.marketplaces[0]?.code||"IT",dupMode:c.dupMode||"price",qtyMode:c.qtyMode||"catalog",force:!!force})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+      if(d.quarantined)setNote("Il controllo di sicurezza ha bloccato la pubblicazione. Il risultato è in quarantena: controllalo e conferma se è corretto.");
+      await load();
+    }catch(e){setErr(e.message)}
+    finally{setGenerating(false)}
+  };
+
+  const publishAction=async(action)=>{
+    if(action==="promote"&&!confirm("Pubblicare comunque il risultato in quarantena come ultimo file pronto?"))return;
+    if(action==="discard"&&!confirm("Scartare il risultato in quarantena?"))return;
+    setActing(true);setErr(null);setNote(null);
+    try{
+      const r=await fetch("/api/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+      setNote(action==="promote"?"Risultato promosso a file pronto.":"Risultato in quarantena scartato.");
+      await load();
+    }catch(e){setErr(e.message)}
+    finally{setActing(false)}
+  };
+
+  const saveToHistory=async(stats)=>{
+    if(!stats)return;setSaving(true);
+    try{
+      await fetch("/api/history",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...stats,source:"browser"})});
+      setNote("Salvato nello storico.");
+    }catch(e){setErr(e.message)}
+    finally{setSaving(false)}
+  };
+
+  const fmtDate=iso=>iso?new Date(iso).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+  const shown=view==="pending"?pending:latest;
+
+  return(
+    <div>
+      {/* Come caricare su Amazon */}
+      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:24}}>🤖</span>
+          <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+            <div style={{fontWeight:700,marginBottom:4}}>Generazione automatica attiva</div>
+            Ogni mattina alle <strong>9:15</strong> (10:15 con l'ora legale), da lunedì a sabato, il sistema scarica i CSV
+            dall'FTP, converte nel formato del template Amazon e tiene il file pronto qui.
+            <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid var(--info-border)"}}>
+              <strong>Su Seller Central carica con “Aggiungi prodotti e modifica il tuo inventario”</strong>, non con
+              “Modifica e sostituisci”. Gli articoli non più disponibili sono già nel file con quantità 0, quindi non
+              serve cancellare e ricreare il catalogo ogni giorno.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {tinfo&&tinfo.missing&&tinfo.missing.length>0&&(
+        <Card accent="#ef4444">
+          <p style={{color:"#ef4444",margin:0,fontSize:13}}>
+            ⚠️ Il template in uso non ha tutte le colonne obbligatorie. Vai nel tab 📄 Template e caricane uno valido.
+          </p>
+        </Card>
+      )}
+
+      {/* Comandi */}
+      <Card>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <Btn v="pri" onClick={()=>generate(false)} disabled={generating} style={{fontSize:14,padding:"10px 24px"}}>
+            {generating?"⏳ Scarico dall'FTP...":"📥 Genera adesso da FTP"}
+          </Btn>
+          <Btn v="ghost" onClick={load} disabled={generating} style={{fontSize:13}}>↻ Ricarica</Btn>
+          <span style={{fontSize:11,color:"var(--text-muted)"}}>
+            Marketplace {c.marketplaces[0]?.code||"—"} • tempo di gestione {c.marketplaces[0]?.leadtime??"—"} gg
+          </span>
+        </div>
+      </Card>
+
+      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>❌ {err}</p></Card>}
+      {note&&<Card accent="#6366f1"><p style={{color:"var(--accent-form)",margin:0,fontSize:13}}>ℹ️ {note}</p></Card>}
+
+      {/* Quarantena */}
+      {pending&&(
+        <Card accent="#f59e0b">
+          <h4 style={{margin:"0 0 6px",color:"#f59e0b"}}>⏸️ Risultato in quarantena</h4>
+          <p style={{fontSize:12,color:"var(--text-muted)",margin:"0 0 10px",lineHeight:1.6}}>
+            Il controllo di sicurezza ha bloccato la pubblicazione. L'ultimo file buono non è stato toccato.
+          </p>
+          <ul style={{margin:"0 0 12px",paddingLeft:18}}>
+            {(pending.safety?.blockers||[]).map((b,i)=><li key={i} style={{fontSize:12,color:"#f59e0b",marginBottom:4}}>{b}</li>)}
+          </ul>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <Btn v="ok" onClick={()=>publishAction("promote")} disabled={acting} style={{fontSize:13}}>✓ Pubblica comunque</Btn>
+            <Btn v="danger" onClick={()=>publishAction("discard")} disabled={acting} style={{fontSize:13}}>✕ Scarta</Btn>
+            <Btn v="ghost" onClick={()=>generate(true)} disabled={generating} style={{fontSize:13}}>↻ Rigenera e forza</Btn>
+          </div>
+        </Card>
+      )}
+
+      {/* Selettore vista */}
+      {latest&&pending&&(
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          {[["latest","📦 Ultimo pronto"],["pending","⏸️ In quarantena"]].map(([v,l])=>(
+            <div key={v} onClick={()=>setView(v)} style={{padding:"8px 16px",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600,
+              border:view===v?"2px solid #6366f1":"2px solid var(--border)",background:view===v?"var(--bg-card)":"var(--bg-input)",
+              color:view===v?"var(--accent-form)":"var(--text-label)"}}>{l}</div>
+          ))}
+        </div>
+      )}
+
+      {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Caricamento...</p></Card>}
+      {status==="empty"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun file ancora generato. Premi “Genera adesso da FTP”.</p></Card>}
+
+      {shown&&shown.stats&&(
+        <div>
+          <Card accent={view==="pending"?"#f59e0b":"#10b981"}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
+              <div>
+                <h4 style={{color:view==="pending"?"#f59e0b":"#10b981",margin:"0 0 4px"}}>
+                  {view==="pending"?"⏸️ File in quarantena":"✓ File pronto"}
+                </h4>
+                <div style={{fontSize:12,color:"var(--text-muted)"}}>
+                  Generato il {fmtDate(shown.stats.generated_at)} • {shown.filename} • {shown.source}
+                </div>
+              </div>
+              <Btn v="ghost" onClick={()=>saveToHistory(shown.stats)} disabled={saving} style={{fontSize:13}}>
+                {saving?"Salvataggio...":"📊 Salva nello storico"}
+              </Btn>
+            </div>
+
+            <DownloadBox records={shown.records||[]} stats={shown.stats} filename={shown.filename}
+              accent={view==="pending"?"pri":"ok"}
+              label={(shown.records||[]).length.toLocaleString()+" righe • prova prima l'.xlsx, il .txt è l'alternativa se il caricamento lo rifiuta"}/>
+
+            <div style={{height:14}}/>
+            <StatsBlock stats={shown.stats}/>
+          </Card>
+
+          <PreviewTable previewData={shown.stats.previewData} total={shown.stats.total_rows}/>
+        </div>
+      )}
     </div>
   );
 }
@@ -1088,6 +1499,8 @@ function App(){
 
   const tabs=[
     {id:"auto",   label:"🤖 Auto"},
+    {id:"template",label:"📄 Template"},
+    {id:"rules",  label:"⚙️ Regole"},
     {id:"convert",label:"⚡ Manuale"},
     {id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},
     {id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},
@@ -1101,8 +1514,8 @@ function App(){
       <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
         <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v5.0</span></h1>
-            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Auto FTP • Multi-fornitore • Fasce rincaro • Storico • Alert</p>
+            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v6.0</span></h1>
+            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Nuovo formato offerte Amazon • Auto FTP • Quantità 0 al posto del purge • Guard-rail</p>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:11,color:{idle:"var(--text-muted)",syncing:"#f59e0b",synced:"#10b981",error:"#ef4444"}[syncStatus]}}>
@@ -1125,7 +1538,9 @@ function App(){
         </div>
       </div>
       <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
-        {tab==="auto"&&<AutoTab/>}
+        {tab==="auto"&&<AutoTab config={c}/>}
+        {tab==="template"&&<TemplateTab/>}
+        {tab==="rules"&&<RulesTab config={c} save={save}/>}
         {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
         {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
         {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}

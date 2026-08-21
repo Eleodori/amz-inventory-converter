@@ -1,59 +1,48 @@
-import { getStore } from "@netlify/blobs";
+/**
+ * /api/config
+ * GET  → configurazione applicazione
+ * POST → salva la configurazione
+ */
 
-const CONFIG_KEY = "app-config";
+import { configStore, CONFIG_KEY, json } from "./_lib/stores.mjs";
 
-function getConfigStore() {
-  return getStore({ name: "amz-config", consistency: "strong" });
-}
+/** Valori di default per le chiavi introdotte con il nuovo formato. */
+const DEFAULTS = {
+  qtyMode: "catalog",
+  dupMode: "price",
+  minStock: 0,        // pubblica solo se lo stock fornitore e' >= a questo valore
+  maxQty: 0,          // 0 = nessun tetto; es. 4 limita l'esposizione per ciclo
+  floorMarginPct: 0,  // se > 0 popola il prezzo minimo consentito al venditore
+  zeroKeepDays: 90,   // per quanti giorni continuare a inviare quantita' 0
+  maxDeltaPct: 20,    // guard-rail: variazione massima di prodotti accettata
+  minProducts: 100,   // guard-rail: sotto questa soglia il risultato e' sospetto
+  alertThresholds: { productsDeltaPct: 10, supplierDeltaPct: 20 },
+};
 
 export default async (req) => {
-  const store = getConfigStore();
+  const store = configStore();
 
-  // GET /api/config → carica la configurazione
   if (req.method === "GET") {
     try {
       const config = await store.get(CONFIG_KEY, { type: "json" });
-      if (!config) {
-        return new Response(JSON.stringify(null), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify(config), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      if (!config) return json(null);
+      return json({ ...DEFAULTS, ...config, alertThresholds: { ...DEFAULTS.alertThresholds, ...(config.alertThresholds || {}) } });
+    } catch (e) {
+      return json({ error: e.message }, 500);
     }
   }
 
-  // POST /api/config → salva la configurazione
   if (req.method === "POST") {
     try {
       const body = await req.json();
-      await store.setJSON(CONFIG_KEY, {
-        ...body,
-        updated_at: new Date().toISOString(),
-      });
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      await store.setJSON(CONFIG_KEY, { ...DEFAULTS, ...body, updated_at: new Date().toISOString() });
+      return json({ ok: true });
+    } catch (e) {
+      return json({ error: e.message }, 500);
     }
   }
 
-  return new Response("Method not allowed", { status: 405 });
+  return json({ error: "Method not allowed" }, 405);
 };
 
-export const config = {
-  path: "/api/config",
-};
+export const config = { path: "/api/config" };

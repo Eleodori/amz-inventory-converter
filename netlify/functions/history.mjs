@@ -1,119 +1,69 @@
-import { getStore } from "@netlify/blobs";
+/**
+ * /api/history
+ * GET    → elenco conversioni (decrescente)
+ * POST   → salva un record (usato dalla conversione manuale nel browser)
+ * DELETE ?id=... → elimina un record
+ */
 
-const STORE_NAME = "conversion-history";
-const MAX_RECORDS = 90; // ~3 mesi di storico assumendo 1 conversione/giorno
-
-function getHistoryStore() {
-  // Usa global store in produzione, deploy store altrove
-  if (Netlify.context?.deploy?.context === "production") {
-    return getStore({ name: STORE_NAME, consistency: "strong" });
-  }
-  return getStore({ name: STORE_NAME, consistency: "strong" });
-}
+import { historyStore, saveHistoryRecord, json } from "./_lib/stores.mjs";
 
 export default async (req) => {
-  const store = getHistoryStore();
+  const store = historyStore();
 
-  // GET /api/history → lista tutte le conversioni
   if (req.method === "GET") {
     try {
       const { blobs } = await store.list();
-
-      const records = await Promise.all(
-        blobs.map(async ({ key }) => {
-          const data = await store.get(key, { type: "json" });
-          return data;
-        })
-      );
-
-      // Ordina per data decrescente, rimuovi null
-      const sorted = records
-        .filter(Boolean)
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-      return new Response(JSON.stringify(sorted), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      const records = await Promise.all(blobs.map(({ key }) => store.get(key, { type: "json" })));
+      const sorted = records.filter(Boolean).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      return json(sorted);
+    } catch (e) {
+      return json({ error: e.message }, 500);
     }
   }
 
-  // POST /api/history → salva una nuova conversione
   if (req.method === "POST") {
     try {
       const body = await req.json();
-
       const record = {
         id: crypto.randomUUID(),
         created_at: new Date().toISOString(),
         marketplace: body.marketplace,
         total_products: body.total_products,
+        total_rows: body.total_rows,
+        zeroed: body.zeroed,
         total_read: body.total_read,
         total_skipped: body.total_skipped,
+        bad_ean: body.bad_ean,
+        below_min_stock: body.below_min_stock,
         duplicates_resolved: body.duplicates_resolved,
         blacklisted: body.blacklisted,
-        by_supplier: body.by_supplier,        // { "Deldo": 1200 }
-        by_tier: body.by_tier,                // { "≤50": 300, "≤100": 800, ... }
-        avg_price_by_tier: body.avg_price_by_tier, // { "≤50": 45.2, ... }
+        by_supplier: body.by_supplier,
+        by_tier: body.by_tier,
+        avg_price_by_tier: body.avg_price_by_tier,
         avg_price_total: body.avg_price_total,
+        source: body.source || "browser",
       };
-
-      const key = `conv-${record.created_at}-${record.id}`;
-      await store.setJSON(key, record);
-
-      // Pulizia: mantieni solo gli ultimi MAX_RECORDS record
-      const { blobs } = await store.list();
-      if (blobs.length > MAX_RECORDS) {
-        const sorted = blobs.sort((a, b) => a.key.localeCompare(b.key));
-        const toDelete = sorted.slice(0, blobs.length - MAX_RECORDS);
-        await Promise.all(toDelete.map(({ key }) => store.delete(key)));
-      }
-
-      return new Response(JSON.stringify({ ok: true, id: record.id }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      await saveHistoryRecord(record); // include la potatura, che prima girava solo qui
+      return json({ ok: true, id: record.id }, 201);
+    } catch (e) {
+      return json({ error: e.message }, 500);
     }
   }
 
-  // DELETE /api/history?id=... → elimina un record
   if (req.method === "DELETE") {
     try {
-      const url = new URL(req.url);
-      const id = url.searchParams.get("id");
-      if (!id) {
-        return new Response(JSON.stringify({ error: "id mancante" }), { status: 400 });
-      }
-
+      const id = new URL(req.url).searchParams.get("id");
+      if (!id) return json({ error: "id mancante" }, 400);
       const { blobs } = await store.list();
       const match = blobs.find(({ key }) => key.includes(id));
       if (match) await store.delete(match.key);
-
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      return json({ ok: true });
+    } catch (e) {
+      return json({ error: e.message }, 500);
     }
   }
 
-  return new Response("Method not allowed", { status: 405 });
+  return json({ error: "Method not allowed" }, 405);
 };
 
-export const config = {
-  path: "/api/history",
-};
+export const config = { path: "/api/history" };
