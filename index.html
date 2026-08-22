@@ -1741,6 +1741,7 @@ function App(){
   const tabs=[
     {id:"auto",   label:"🤖 Auto"},
     {id:"template",label:"📄 Template"},
+    {id:"asin",   label:"🔗 ASIN"},
     {id:"rules",  label:"⚙️ Regole"},
     {id:"convert",label:"⚡ Manuale"},
     {id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},
@@ -1755,8 +1756,8 @@ function App(){
       <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
         <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v6.0</span></h1>
-            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Nuovo formato offerte Amazon • Auto FTP • Quantità 0 al posto del purge • Guard-rail</p>
+            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v6.1</span></h1>
+            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Nuovo formato offerte Amazon • ASIN verificato • Quantità 0 al posto del purge • Guard-rail</p>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:11,color:{idle:"var(--text-muted)",syncing:"#f59e0b",synced:"#10b981",error:"#ef4444"}[syncStatus]}}>
