@@ -1537,16 +1537,32 @@ function AutoTab({config:c}){
         </div>
       </Card>
 
-      {latest&&latest.stats&&latest.stats.without_asin>0&&(
-        <Card accent="#f59e0b">
-          <p style={{color:"#f59e0b",margin:0,fontSize:13,lineHeight:1.6}}>
-            ⚠️ {latest.stats.without_asin.toLocaleString()} righe su {latest.stats.total_rows.toLocaleString()} sono
-            inviate col solo EAN, quindi l'abbinamento alla pagina prodotto lo decide Amazon.
-            È il meccanismo che ha causato le vendite del pneumatico sbagliato. Carica una mappa più
-            completa dal tab 🔗 ASIN, o attiva lì "pubblica solo gli EAN con ASIN verificato".
-          </p>
-        </Card>
-      )}
+      {/* Righe col solo EAN.
+          Prima era sempre arancione: un avviso acceso ogni mattina su un numero
+          che cambia poco smette di essere letto. Ora è informativo, e diventa
+          arancione solo se il numero peggiora rispetto al file precedente. */}
+      {latest&&latest.stats&&latest.stats.without_asin>0&&(()=>{
+        const now=latest.stats.without_asin, tot=latest.stats.total_rows||0;
+        const before=typeof latest.prev?.without_asin==="number"?latest.prev.without_asin:null;
+        const delta=before===null?null:now-before;
+        const worse=delta!==null&&delta>0;
+        const pct=tot?Math.round(now/tot*100):0;
+        const col=worse?"#f59e0b":"var(--text-muted)";
+        return(
+          <Card accent={worse?"#f59e0b":undefined}>
+            <p style={{color:col,margin:0,fontSize:13,lineHeight:1.6}}>
+              {worse?"⚠️":"ℹ️"} <strong>{now.toLocaleString()}</strong> righe su {tot.toLocaleString()} ({pct}%)
+              sono inviate col solo EAN: per quelle l'abbinamento alla pagina prodotto lo decide Amazon.
+              {delta===null?" Non ho un file precedente con cui confrontarlo.":
+               delta===0?" Come nel file precedente.":
+               delta<0?` ${Math.abs(delta).toLocaleString()} in meno del file precedente.`:
+                        ` ${delta.toLocaleString()} in più del file precedente (erano ${before.toLocaleString()}).`}
+              {worse&&" Sono EAN nuovi che il fornitore ha iniziato a mandare e che la mappa verificata non copre: rigenerala e ricaricala dal tab 🔗 ASIN."}
+              {!worse&&" Per ridurle, aggiorna la mappa verificata dal tab 🔗 ASIN."}
+            </p>
+          </Card>
+        );
+      })()}
 
       {tinfo&&tinfo.missing&&tinfo.missing.length>0&&(
         <Card accent="#ef4444">

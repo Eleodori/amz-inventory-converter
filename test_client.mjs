@@ -27,7 +27,14 @@ const H = globalThis.__H;
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); console.log("  ✓ " + n); pass++; } catch (e) { console.log("  ✗ " + n + "\n      " + e.message); fail++; } };
 
-const REF = "/root/.claude/uploads/dc3f1e41-03a7-5194-aef8-50015387be7f/bbe65d22-InventoryLoader_IT_20260820New_Version.xlsm";
+const REF = process.env.AMZ_TEMPLATE_REF || "fixtures/template_amazon_riferimento.xlsm";
+if (!fs.existsSync(REF)) {
+  // Prima qui c'era un percorso assoluto della sandbox in cui il file era stato
+  // caricato: su qualsiasi altra macchina `npm test` moriva con ENOENT invece di
+  // saltare il gruppo di test, e sembrava che il codice fosse rotto.
+  console.log("\n\u2500\u2500 template di riferimento assente (" + REF + "), salto i test client \u2500\u2500");
+  process.exit(0);
+}
 const bytes = fs.readFileSync(REF);
 const fakeFile = { name: "InventoryLoader_IT_20260820New_Version.xlsm", arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
 

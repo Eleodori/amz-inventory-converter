@@ -75,6 +75,22 @@ export async function pushAlerts(newOnes, { keepDays = 30 } = {}) {
   return stamped.length;
 }
 
+/**
+ * Fotografia essenziale delle statistiche del file precedente, salvata nel
+ * payload nuovo. Serve al confronto giorno-su-giorno nell'interfaccia senza
+ * dover interrogare lo storico. Null-safe: al primo giro previous non esiste.
+ */
+export function prevSnapshot(stats) {
+  if (!stats) return null;
+  return {
+    without_asin: stats.without_asin ?? null,
+    with_asin: stats.with_asin ?? null,
+    total_rows: stats.total_rows ?? null,
+    total_products: stats.total_products ?? null,
+    created_at: stats.created_at ?? null,
+  };
+}
+
 export function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,

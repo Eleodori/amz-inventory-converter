@@ -9,6 +9,7 @@ import XLSX from "xlsx";
 import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
 import { seedTemplate, resolveColumns } from "./netlify/functions/_lib/template.mjs";
 import { parseAsinMapCsv, asinMapInfo } from "./netlify/functions/_lib/asinmap.mjs";
+import { prevSnapshot } from "./netlify/functions/_lib/stores.mjs";
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -290,7 +291,7 @@ t("range copre tutte le colonne", () => {
 });
 
 console.log("\n── confronto col file compilato a mano da Michele ──");
-const REF = "/root/.claude/uploads/dc3f1e41-03a7-5194-aef8-50015387be7f/bbe65d22-InventoryLoader_IT_20260820New_Version.xlsm";
+const REF = process.env.AMZ_TEMPLATE_REF || "fixtures/template_amazon_riferimento.xlsm";
 if (fs.existsSync(REF)) {
   const ref = XLSX.read(fs.readFileSync(REF), { type: "buffer", sheetRows: 8 });
   const rs = ref.Sheets["Modello"];
@@ -314,6 +315,38 @@ if (fs.existsSync(REF)) {
 } else {
   console.log("  – file di riferimento non disponibile, salto");
 }
+
+console.log("\n── confronto col file precedente (banner solo-EAN) ──");
+t("prevSnapshot e' null-safe al primo giro", () => {
+  assert.equal(prevSnapshot(null), null);
+  assert.equal(prevSnapshot(undefined), null);
+});
+t("prevSnapshot porta i campi del confronto", () => {
+  const snap = prevSnapshot({ without_asin: 3280, with_asin: 4800, total_rows: 8080, total_products: 7739, altro: "ignorato" });
+  assert.equal(snap.without_asin, 3280);
+  assert.equal(snap.with_asin, 4800);
+  assert.equal(snap.total_rows, 8080);
+  assert.equal(snap.total_products, 7739);
+  assert.equal(snap.altro, undefined);
+});
+t("prevSnapshot mette null sui campi assenti, non undefined", () => {
+  const snap = prevSnapshot({ total_rows: 10 });
+  assert.equal(snap.without_asin, null);
+  assert.ok("without_asin" in snap);
+});
+t("il banner non e' piu' arancione a prescindere", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.ok(!/without_asin>0&&\(\s*<Card accent="#f59e0b"/.test(html),
+    "il banner usa ancora un accent arancione fisso");
+  assert.ok(html.includes("prev?.without_asin"), "il banner non legge il valore precedente");
+});
+t("entrambi gli handler scrivono prev nel payload", () => {
+  for (const f of ["netlify/functions/ftp-convert.mjs", "netlify/functions/scheduled-convert.mjs"]) {
+    const src = fs.readFileSync(f, "utf8");
+    assert.ok(/prev: prevSnapshot\(/.test(src), f + " non salva prev");
+    assert.ok(/prevSnapshot[,\s]/.test(src.split("stores.mjs")[0]), f + " non importa prevSnapshot");
+  }
+});
 
 console.log(`\n${fail === 0 ? "✅" : "❌"}  ${pass} test passati, ${fail} falliti\n`);
 process.exit(fail ? 1 : 0);

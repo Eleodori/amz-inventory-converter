@@ -19,7 +19,7 @@ import { loadAsinMap } from "./_lib/asinmap.mjs";
 import {
   resultStore, RESULT_KEY, PENDING_KEY,
   loadConfig, loadPublishedSkus, savePublishedSkus,
-  saveHistoryRecord, pushAlerts, historyFrom,
+  saveHistoryRecord, pushAlerts, historyFrom, prevSnapshot,
 } from "./_lib/stores.mjs";
 
 export default async () => {
@@ -73,6 +73,7 @@ export default async () => {
     const payload = {
       records,
       stats,
+      prev: prevSnapshot(previousStats),
       filename: `Offerte_${marketplace}_${new Date().toISOString().slice(0, 10)}`,
       source: "scheduled",
     };

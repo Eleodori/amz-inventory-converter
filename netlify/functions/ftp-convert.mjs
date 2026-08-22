@@ -18,7 +18,7 @@ import { loadAsinMap } from "./_lib/asinmap.mjs";
 import {
   resultStore, RESULT_KEY, PENDING_KEY,
   loadConfig, loadPublishedSkus, savePublishedSkus,
-  saveHistoryRecord, pushAlerts, historyFrom, json,
+  saveHistoryRecord, pushAlerts, historyFrom, json, prevSnapshot,
 } from "./_lib/stores.mjs";
 
 export default async (req) => {
@@ -78,6 +78,9 @@ export default async (req) => {
     const payload = {
       records,
       stats,
+      // Confronto con il file precedente: serve al banner "righe col solo EAN",
+      // che deve allarmare solo se il numero peggiora, non tutti i giorni.
+      prev: prevSnapshot(previous?.stats),
       filename: `Offerte_${marketplace}_${new Date().toISOString().slice(0, 10)}`,
       safety: check,
       source: force ? "manual-forced" : "manual",
