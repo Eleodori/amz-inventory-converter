@@ -8,6 +8,7 @@ import fs from "node:fs";
 import XLSX from "xlsx";
 import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
 import { seedTemplate, resolveColumns } from "./netlify/functions/_lib/template.mjs";
+import { parseAsinMapCsv, asinMapInfo } from "./netlify/functions/_lib/asinmap.mjs";
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -55,6 +56,7 @@ t("scaglioni disordinati danno lo stesso risultato di quelli ordinati", () => {
 
 // ─── Conversione completa ─────────────────────────────────────────────────────
 const template = seedTemplate();
+const cols0 = resolveColumns(template).cols;
 const config = {
   suppliers: [{ name: "Deldo", delimiter: ";", skuCol: "EAN", eanCol: "EAN", priceCol: "Price", stockCol: "Stock", ftpFolder: "DLD", tiers: [{ upTo: null, markupPct: 10, flatFee: 12 }] }],
   marketplaces: [{ code: "IT", quantity: 8, leadtime: 4 }],
@@ -111,6 +113,69 @@ const r4 = runConversion({ ...config, minStock: 50, maxQty: 4, floorMarginPct: 5
 t("esclude sotto la soglia di stock", () => assert.equal(r4.stats.below_min_stock, 1));
 t("applica il tetto alla quantita'", () => assert.equal(r4.records[0].qty, 4));
 t("popola il prezzo minimo", () => assert.equal(r4.records[0].minPrice.toFixed(2), (145.10 * 1.05).toFixed(2)));
+
+console.log("\n── mappa EAN → ASIN ──");
+const CSV_MAP = [
+  "ean,asin,marca,misura,titolo_amazon",
+  `${E1},B00DMCD2NU,DUNLOP,225/55/18,"Dunlop SPORT 4D XL 225/55/R18 102 H"`,
+  `${E2},B0BTHGKH5C,BRIDGESTONE,235/55/18,"Bridgestone TURANZA 6"`,
+  "9999999999999,NONVALIDO,X,,riga da scartare",
+  "abc,B00DMCD2NU,X,,riga da scartare",
+].join("\n");
+const parsed = parseAsinMapCsv(CSV_MAP);
+t("legge le coppie valide", () => assert.equal(Object.keys(parsed.map).length, 2));
+t("scarta ASIN e EAN non validi", () => assert.equal(parsed.skipped, 2));
+t("conserva marca e misura", () => assert.equal(parsed.map[E1].brand, "DUNLOP"));
+t("rifiuta un CSV senza le colonne giuste", () => {
+  assert.ok(parseAsinMapCsv("pippo,pluto\n1,2").errors.length > 0);
+});
+t("asinMapInfo trova le collisioni", () => {
+  const info = asinMapInfo({ a: { asin: "B00000000A" }, b: { asin: "B00000000A" }, c: { asin: "B00000000B" } });
+  assert.equal(info.count, 3);
+  assert.equal(info.distinctAsins, 2);
+  assert.equal(info.collisions, 1);
+});
+
+console.log("\n── ASIN nel file al posto dell'EAN ──");
+const rMapped = runConversion(config, { Deldo: csv }, template, {
+  marketplace: "IT", publishedSkus: {}, asinMap: parsed.map,
+});
+t("il record porta l'ASIN verificato", () => {
+  assert.equal(rMapped.records.find(r => r.ean === E1).asin, "B00DMCD2NU");
+});
+t("statistiche con/senza ASIN", () => {
+  assert.equal(rMapped.stats.with_asin, 2);
+  assert.equal(rMapped.stats.without_asin, 0);
+  assert.equal(rMapped.stats.asin_map_size, 2);
+});
+t("riga con ASIN: colonna ASIN piena e colonne EAN vuote", () => {
+  const rows = expandRows(rMapped.records, template, { marketplace: "IT", leadtime: 4 });
+  const row = rows[0];
+  assert.equal(row[cols0.asin], "B00DMCD2NU");
+  assert.equal(row[cols0.extId], "", "l'EAN non va inviato insieme all'ASIN");
+  assert.equal(row[cols0.extIdType], "");
+});
+t("riga senza ASIN: torna a usare l'EAN", () => {
+  const r = runConversion(config, { Deldo: csv }, template, { marketplace: "IT", publishedSkus: {}, asinMap: {} });
+  const rows = expandRows(r.records, template, { marketplace: "IT", leadtime: 4 });
+  assert.equal(rows[0][cols0.asin], "");
+  assert.equal(rows[0][cols0.extId], r.records[0].ean);
+  assert.equal(r.stats.without_asin, 2);
+});
+t("onlyMapped esclude gli EAN senza ASIN verificato", () => {
+  const r = runConversion({ ...config, onlyMapped: true }, { Deldo: csv }, template,
+    { marketplace: "IT", publishedSkus: {}, asinMap: { [E1]: { asin: "B00DMCD2NU" } } });
+  assert.equal(r.records.filter(x => x.qty > 0).length, 1);
+  assert.equal(r.stats.unmapped_skipped, 1);
+});
+t("anche la riga a quantita' 0 porta l'ASIN", () => {
+  const day1 = runConversion(config, { Deldo: csv }, template, { marketplace: "IT", publishedSkus: {}, asinMap: parsed.map });
+  const day2 = runConversion(config, { Deldo: csvDay2 }, template,
+    { marketplace: "IT", publishedSkus: day1.publishedSkus, asinMap: parsed.map });
+  const zero = day2.records.find(r => r.qty === 0);
+  assert.ok(zero, "nessuna riga a zero");
+  assert.equal(zero.asin, parsed.map[zero.ean].asin);
+});
 
 console.log("\n── guard-rail ──");
 t("blocca il crollo di prodotti", () => {

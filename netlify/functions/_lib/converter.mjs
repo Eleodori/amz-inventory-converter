@@ -163,8 +163,16 @@ export function expandRows(records, template, opts = {}) {
     const put = (f, v) => { if (cols[f] !== undefined) row[cols[f]] = v; };
     put("sku", rec.sku);
     put("action", vocab.create);
-    put("extIdType", vocab.ean);
-    put("extId", rec.ean);
+    // Se abbiamo un ASIN verificato lo scriviamo e NON mandiamo l'EAN: cosi'
+    // l'offerta e' inchiodata al prodotto giusto invece di essere abbinata da
+    // Amazon. Le istruzioni del template dicono "l'ASIN OPPURE l'ID esterno",
+    // quindi non li mandiamo insieme.
+    if (rec.asin && cols.asin !== undefined) {
+      put("asin", rec.asin);
+    } else {
+      put("extIdType", vocab.ean);
+      put("extId", rec.ean);
+    }
     put("condition", vocab.conditionNew);
     put("channel", vocab.channelMerchant);
     put("quantity", Number(rec.qty) || 0);
@@ -209,6 +217,8 @@ export function runConversion(config, csvMap, template, opts = {}) {
   const dupMode = opts.dupMode || "price";
   const qtyMode = opts.qtyMode || "catalog";
   const published = opts.publishedSkus || {};
+  const asinMap = opts.asinMap || {};
+  const onlyMapped = !!config.onlyMapped;
 
   const mp = (config.marketplaces || []).find(m => m.code === marketplace);
   if (!mp) throw new Error(`Marketplace ${marketplace} non trovato nella configurazione`);
@@ -223,7 +233,7 @@ export function runConversion(config, csvMap, template, opts = {}) {
   const maxQty = Number(config.maxQty ?? 0);
 
   const em = {};
-  let totalRead = 0, skipped = 0, badEan = 0, dup = 0, blocked = 0, belowMinStock = 0;
+  let totalRead = 0, skipped = 0, badEan = 0, dup = 0, blocked = 0, belowMinStock = 0, unmappedSkipped = 0;
   const errors = [];
   const tierCounts = {}, tierPriceSum = {};
 
@@ -287,6 +297,9 @@ export function runConversion(config, csvMap, template, opts = {}) {
     const qty = maxQty > 0 ? Math.min(raw, maxQty) : raw;
 
     const rec = { sku: it.sku, ean: it.ean, qty, price: round2(it.price) };
+    const mapped = asinMap[it.ean];
+    if (mapped?.asin) rec.asin = mapped.asin;
+    else if (onlyMapped) { unmappedSkipped++; continue; } // non pubblichiamo cio' che non e' verificato
     if (floorMarginPct > 0) rec.minPrice = round2(it.costPrice * (1 + floorMarginPct / 100));
     records.push(rec);
 
@@ -322,7 +335,9 @@ export function runConversion(config, csvMap, template, opts = {}) {
     const zeroSince = rec.zeroSince || today;
     const ageDays = Math.floor((Date.parse(today) - Date.parse(zeroSince)) / 86400000);
     if (ageDays > zeroKeepDays) { dropped++; continue; } // smettiamo di ripeterla ogni giorno
-    records.push({ sku: rec.sku || ean, ean, qty: 0, price: round2(Number(rec.price) || 0.01) });
+    const zeroRow = { sku: rec.sku || ean, ean, qty: 0, price: round2(Number(rec.price) || 0.01) };
+    if (asinMap[ean]?.asin) zeroRow.asin = asinMap[ean].asin;
+    records.push(zeroRow);
     nextPublished[ean] = { ...rec, zeroSince, lastZeroed: today };
     zeroed++;
     if (previewData.length < 50) {
@@ -349,6 +364,10 @@ export function runConversion(config, csvMap, template, opts = {}) {
       below_min_stock: belowMinStock,
       duplicates_resolved: dup,
       blacklisted: blocked,
+      with_asin: records.filter(r => r.asin).length,
+      without_asin: records.filter(r => !r.asin).length,
+      unmapped_skipped: unmappedSkipped,
+      asin_map_size: Object.keys(asinMap).length,
       by_supplier: bySupplier,
       by_tier: tierCounts,
       avg_price_by_tier,

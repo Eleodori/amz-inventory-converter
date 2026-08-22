@@ -7,12 +7,14 @@ export const resultStore    = () => S("ftp-results");
 export const alertStore     = () => S("amz-alerts");
 export const historyStore   = () => S("conversion-history");
 export const templateStore  = () => S("amz-template");
+export const asinMapStore   = () => S("amz-asinmap");
 export const publishedStore = () => S("amz-published");
 
 export const CONFIG_KEY    = "app-config";
 export const RESULT_KEY    = "latest";
 export const PENDING_KEY   = "pending";
 export const TEMPLATE_KEY  = "current";
+export const ASINMAP_KEY   = "map";
 export const PUBLISHED_KEY = "skus";
 
 export const HISTORY_MAX = 180;
@@ -95,6 +97,9 @@ export function historyFrom(stats, source) {
     below_min_stock: stats.below_min_stock,
     duplicates_resolved: stats.duplicates_resolved,
     blacklisted: stats.blacklisted,
+    with_asin: stats.with_asin,
+    without_asin: stats.without_asin,
+    unmapped_skipped: stats.unmapped_skipped,
     by_supplier: stats.by_supplier,
     by_tier: stats.by_tier,
     avg_price_by_tier: stats.avg_price_by_tier,

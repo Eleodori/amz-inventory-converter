@@ -158,6 +158,7 @@ const FIELD_PATTERNS={
   action:/^::record_action$/,
   extIdType:/^externally_assigned_product_identifier#1\.type$/,
   extId:/^externally_assigned_product_identifier#1\.value$/,
+  asin:/^merchant_suggested_asin#1\.value$/,
   condition:/^condition_type#1\.value$/,
   channel:/^fulfillment_availability#1\.fulfillment_channel_code$/,
   quantity:/^fulfillment_availability#1\.quantity$/,
@@ -167,7 +168,7 @@ const FIELD_PATTERNS={
   maxPrice:/maximum_seller_allowed_price#1\.schedule#1\.value_with_tax$/
 };
 const REQUIRED_FIELDS=["sku","action","extIdType","extId","condition","channel","quantity","price"];
-const FIELD_LABELS={sku:"SKU",action:"Azione",extIdType:"Tipo ID",extId:"EAN",condition:"Condizione",channel:"Canale",quantity:"Quantità",leadtime:"Tempo gestione",price:"Prezzo",minPrice:"Prezzo min",maxPrice:"Prezzo max"};
+const FIELD_LABELS={sku:"SKU",action:"Azione",extIdType:"Tipo ID",extId:"EAN",asin:"ASIN",condition:"Condizione",channel:"Canale",quantity:"Quantità",leadtime:"Tempo gestione",price:"Prezzo",minPrice:"Prezzo min",maxPrice:"Prezzo max"};
 const VOCAB={
   it_IT:{create:"Crea o modifica",ean:"EAN",conditionNew:"Nuovo",channelMerchant:"Gestito dal venditore (default)"},
   en_GB:{create:"Create or update",ean:"EAN",conditionNew:"New",channelMerchant:"Merchant Fulfilled (default)"},
@@ -200,7 +201,12 @@ function expandRecords(records,t,opts){
   return records.map(rec=>{
     const row=new Array(n).fill("");
     const put=(f,v)=>{if(cols[f]!==undefined)row[cols[f]]=v};
-    put("sku",rec.sku);put("action",voc.create);put("extIdType",voc.ean);put("extId",rec.ean);
+    put("sku",rec.sku);put("action",voc.create);
+    // Con un ASIN verificato scriviamo quello e NON l'EAN: le istruzioni del
+    // template dicono "l'ASIN OPPURE l'ID esterno", e l'ASIN inchioda l'offerta
+    // al prodotto giusto invece di lasciare l'abbinamento ad Amazon.
+    if(rec.asin&&cols.asin!==undefined){put("asin",rec.asin);}
+    else{put("extIdType",voc.ean);put("extId",rec.ean);}
     put("condition",voc.conditionNew);put("channel",voc.channelMerchant);
     put("quantity",Number(rec.qty)||0);
     if(lead!==null&&lead!==undefined&&lead!=="")put("leadtime",Number(lead));
@@ -1036,8 +1042,13 @@ function StatsBlock({stats}){
         ["Scartate",stats.total_skipped],
       ]}/>
       <KpiRow items={[
+        ["Con ASIN",stats.with_asin,"Righe con ASIN verificato: l'offerta è inchiodata al prodotto giusto"],
+        ["Senza ASIN",stats.without_asin,"Righe inviate col solo EAN: l'abbinamento lo fa Amazon"],
+        ["Esclusi non mappati",stats.unmapped_skipped,"Esclusi perché senza ASIN verificato (opzione attiva nel tab ASIN)"],
         ["EAN non validi",stats.bad_ean,"Codici non numerici, lunghezza errata o cifra di controllo sbagliata"],
         ["Sotto soglia",stats.below_min_stock,"Esclusi perché lo stock fornitore è sotto la soglia minima"],
+      ]}/>
+      <KpiRow items={[
         ["Duplicati",stats.duplicates_resolved],
         ["Blacklist",stats.blacklisted],
         ["Non più tracciate",stats.dropped_from_tracking,"SKU a zero da più giorni del limite: smettiamo di ripeterle"],
@@ -1173,6 +1184,181 @@ function TemplateTab(){
           </div>
         )}
       </Card>
+
+      {msg&&<Card accent="#10b981"><p style={{color:"#10b981",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
+      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13}}>❌ {err}</p></Card>}
+    </div>
+  );
+}
+
+// ─── Tab ASIN (mappa verificata + registro SKU) ──────────────────────────────
+function AsinTab({config:c,save}){
+  const[map,setMap]=useState(null);
+  const[reg,setReg]=useState(null);
+  const[busy,setBusy]=useState(null);
+  const[msg,setMsg]=useState(null);
+  const[err,setErr]=useState(null);
+  const[onlyMapped,setOnlyMapped]=useState(!!c.onlyMapped);
+
+  const load=async()=>{
+    setErr(null);
+    try{
+      const[a,b]=await Promise.all([fetch("/api/asinmap"),fetch("/api/published")]);
+      if(a.ok)setMap((await a.json()).info);
+      if(b.ok)setReg((await b.json()).info);
+    }catch(e){setErr(e.message)}
+  };
+  useEffect(()=>{load()},[]);
+
+  const upload=async(kind,file,replace)=>{
+    if(!file)return;
+    setBusy(kind);setErr(null);setMsg(null);
+    try{
+      const text=await file.text();
+      const url=kind==="map"?("/api/asinmap"+(replace?"?replace=1":"")):"/api/published";
+      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:text});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+      if(kind==="map"){
+        setMsg(`Mappa aggiornata: ${d.caricate} coppie caricate${d.abbinamenti_cambiati?`, ${d.abbinamenti_cambiati} abbinamenti cambiati`:""}${d.righe_scartate?`, ${d.righe_scartate} righe scartate`:""}.`);
+      }else{
+        setMsg(`${d.nota} (${d.righe_nel_report} righe lette, ${d.aggiunte_al_registro} aggiunte)`);
+      }
+      await load();
+    }catch(e){setErr(e.message)}
+    finally{setBusy(null)}
+  };
+
+  const clearMap=async()=>{
+    if(!confirm("Svuotare la mappa? Senza ASIN verificato l'abbinamento torna a farlo Amazon, che è la causa degli ordini sbagliati."))return;
+    setBusy("clear");setErr(null);setMsg(null);
+    try{await fetch("/api/asinmap",{method:"DELETE"});setMsg("Mappa svuotata.");await load();}
+    catch(e){setErr(e.message)}finally{setBusy(null)}
+  };
+
+  const toggleOnlyMapped=()=>{
+    const v=!onlyMapped;setOnlyMapped(v);save({...c,onlyMapped:v});
+    setMsg(v?"Da adesso vengono pubblicati solo gli EAN con ASIN verificato.":"Da adesso vengono pubblicati anche gli EAN senza ASIN verificato (abbinamento fatto da Amazon).");
+  };
+
+  const Box=({children,accent})=><Card accent={accent}>{children}</Card>;
+
+  return(
+    <div>
+      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:24}}>🔗</span>
+          <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+            <div style={{fontWeight:700,marginBottom:4}}>Perché questa mappa esiste</div>
+            Il template permette di identificare il prodotto con l'ASIN <em>oppure</em> con l'EAN.
+            Finché mandavamo solo l'EAN, era Amazon a scegliere la pagina prodotto: su 5.571 offerte
+            attive 94 erano finite sulla scheda di un pneumatico di misura o marca diversa, e due
+            sono state vendute. Con l'ASIN scritto esplicitamente l'offerta è inchiodata al prodotto
+            giusto e non può più spostarsi.
+            <div style={{marginTop:6}}>
+              La mappa la produce <code>audit_asin.mjs</code>, che confronta marca e misura del listino
+              fornitore con il titolo della pagina Amazon e tiene solo le coppie coerenti.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* ── Mappa EAN → ASIN ── */}
+      <Box accent={map&&map.count>0?"#10b981":"#f59e0b"}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
+          <div>
+            <h4 style={{margin:"0 0 4px",color:map&&map.count>0?"#10b981":"#f59e0b"}}>
+              {map&&map.count>0?"✓ Mappa EAN → ASIN attiva":"⚠️ Nessuna mappa caricata"}
+            </h4>
+            <div style={{fontSize:12,color:"var(--text-muted)"}}>
+              {map&&map.count>0
+                ?`${map.count.toLocaleString()} coppie verificate${map.verifiedTo?` · ultima verifica ${map.verifiedTo}`:""}`
+                :"Senza mappa l'abbinamento lo fa Amazon"}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
+              {busy==="map"?"⏳ Carico...":"⬆ Carica mappa verificata"}
+              <input type="file" accept=".csv,.txt" style={{display:"none"}} disabled={!!busy} onChange={e=>upload("map",e.target.files[0],false)}/>
+            </label>
+            {map&&map.count>0&&<Btn v="danger" onClick={clearMap} disabled={!!busy} style={{fontSize:13}}>Svuota</Btn>}
+          </div>
+        </div>
+
+        {map&&(
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
+            {[["Coppie EAN→ASIN",map.count],["ASIN distinti",map.distinctAsins],["Collisioni",map.collisions]].map(([l,v])=>(
+              <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                <div style={{fontSize:20,fontWeight:700,color:l==="Collisioni"&&v>0?"#ef4444":"var(--text)"}}>{(v||0).toLocaleString()}</div>
+                <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {map&&map.collisions>0&&(
+          <div style={{marginTop:12,padding:"8px 12px",background:"var(--bl-bg)",border:"1px solid var(--bl-border)",borderRadius:8}}>
+            <div style={{fontSize:12,color:"var(--bl-text)",fontWeight:700,marginBottom:4}}>
+              {map.collisions} ASIN hanno più di un EAN nella mappa
+            </div>
+            <div style={{fontSize:11,color:"var(--bl-text)",lineHeight:1.5}}>
+              Due pneumatici diversi non possono essere la stessa pagina prodotto: per ognuno di questi
+              uno dei due abbinamenti è sbagliato.
+              {map.collisionSample&&map.collisionSample.length>0&&(
+                <div style={{marginTop:6,fontFamily:"monospace",fontSize:10}}>
+                  {map.collisionSample.map(cs=><div key={cs.asin}>{cs.asin} ← {cs.eans.join(", ")}</div>)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid var(--border)"}}>
+          <div onClick={toggleOnlyMapped} style={{display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
+            <div style={{width:18,height:18,borderRadius:4,flexShrink:0,marginTop:1,
+              border:onlyMapped?"none":"2px solid var(--border-input)",background:onlyMapped?"#10b981":"transparent",
+              color:"#fff",fontSize:13,lineHeight:"18px",textAlign:"center",fontWeight:700}}>{onlyMapped?"✓":""}</div>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:"var(--text)"}}>Pubblica solo gli EAN con ASIN verificato</div>
+              <div style={{fontSize:11,color:"var(--text-muted)",lineHeight:1.6,marginTop:2}}>
+                Il modo più sicuro: quello che non è verificato non va in vendita. Riduce il catalogo
+                agli abbinamenti certi. Lasciandolo spento, gli EAN senza mappa vengono pubblicati con
+                l'EAN e l'abbinamento lo fa Amazon — con il rischio che hai già visto.
+              </div>
+            </div>
+          </div>
+        </div>
+      </Box>
+
+      {/* ── Registro SKU pubblicate ── */}
+      <Box>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
+          <div>
+            <h4 style={{margin:"0 0 4px",fontSize:15}}>📇 Registro delle SKU pubblicate</h4>
+            <div style={{fontSize:12,color:"var(--text-muted)",lineHeight:1.6,maxWidth:560}}>
+              È il registro che decide chi esce con quantità 0. Inizializzalo dal report
+              <strong> offerte attive</strong> di Seller Central: le offerte attive su Amazon che il
+              fornitore non rifornisce più entrano nel registro e vengono disattivate al primo file
+              utile. Costruendolo solo dal listino fornitore, quelle offerte restavano acquistabili
+              per sempre.
+            </div>
+          </div>
+          <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1,whiteSpace:"nowrap"}}>
+            {busy==="reg"?"⏳ Carico...":"⬆ Carica offerte attive"}
+            <input type="file" accept=".txt,.csv,.tsv" style={{display:"none"}} disabled={!!busy} onChange={e=>upload("reg",e.target.files[0])}/>
+          </label>
+        </div>
+        {reg&&(
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
+            {[["SKU tracciate",reg.count],["Attive",reg.attive],["A quantità 0",reg.a_zero],["Da report Amazon",reg.da_offerte_amazon]].map(([l,v])=>(
+              <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
+                <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Box>
 
       {msg&&<Card accent="#10b981"><p style={{color:"#10b981",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
       {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13}}>❌ {err}</p></Card>}
@@ -1350,6 +1536,17 @@ function AutoTab({config:c}){
           </div>
         </div>
       </Card>
+
+      {latest&&latest.stats&&latest.stats.without_asin>0&&(
+        <Card accent="#f59e0b">
+          <p style={{color:"#f59e0b",margin:0,fontSize:13,lineHeight:1.6}}>
+            ⚠️ {latest.stats.without_asin.toLocaleString()} righe su {latest.stats.total_rows.toLocaleString()} sono
+            inviate col solo EAN, quindi l'abbinamento alla pagina prodotto lo decide Amazon.
+            È il meccanismo che ha causato le vendite del pneumatico sbagliato. Carica una mappa più
+            completa dal tab 🔗 ASIN, o attiva lì "pubblica solo gli EAN con ASIN verificato".
+          </p>
+        </Card>
+      )}
 
       {tinfo&&tinfo.missing&&tinfo.missing.length>0&&(
         <Card accent="#ef4444">
@@ -1584,6 +1781,7 @@ function App(){
       <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
         {tab==="auto"&&<AutoTab config={c}/>}
         {tab==="template"&&<TemplateTab/>}
+        {tab==="asin"&&<AsinTab config={c} save={save}/>}
         {tab==="rules"&&<RulesTab config={c} save={save}/>}
         {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
         {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}

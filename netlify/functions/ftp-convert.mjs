@@ -14,6 +14,7 @@
 import { fetchAllCSVsFromFTP } from "./_lib/ftp.mjs";
 import { runConversion, safetyCheck } from "./_lib/converter.mjs";
 import { loadTemplate } from "./_lib/template.mjs";
+import { loadAsinMap } from "./_lib/asinmap.mjs";
 import {
   resultStore, RESULT_KEY, PENDING_KEY,
   loadConfig, loadPublishedSkus, savePublishedSkus,
@@ -61,12 +62,13 @@ export default async (req) => {
       return json({ error: "Nessun CSV scaricato dall'FTP. " + (problems.join(" | ") || "Verifica le cartelle in /fornitori.") }, 400);
     }
 
-    const publishedSkus = await loadPublishedSkus();
+    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(), loadAsinMap()]);
     const { records, stats, publishedSkus: nextPublished } = runConversion(config, csvMap, template, {
       marketplace,
       dupMode: body.dupMode || "price",
       qtyMode: body.qtyMode || config.qtyMode || "catalog",
       publishedSkus,
+      asinMap,
     });
     if (problems.length) stats.errors = [...(stats.errors || []), ...problems];
 

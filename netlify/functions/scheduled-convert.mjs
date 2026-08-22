@@ -15,6 +15,7 @@
 import { fetchAllCSVsFromFTP } from "./_lib/ftp.mjs";
 import { runConversion, safetyCheck, buildAlerts } from "./_lib/converter.mjs";
 import { loadTemplate } from "./_lib/template.mjs";
+import { loadAsinMap } from "./_lib/asinmap.mjs";
 import {
   resultStore, RESULT_KEY, PENDING_KEY,
   loadConfig, loadPublishedSkus, savePublishedSkus,
@@ -56,16 +57,18 @@ export default async () => {
       return;
     }
 
-    const publishedSkus = await loadPublishedSkus();
+    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(), loadAsinMap()]);
     console.log("⚙️ Conversione in corso...");
     const { records, stats, publishedSkus: nextPublished } = runConversion(config, csvMap, template, {
       marketplace,
       dupMode: config.dupMode || "price",
       qtyMode: config.qtyMode || "catalog",
       publishedSkus,
+      asinMap,
     });
     if (problems.length) stats.errors = [...(stats.errors || []), ...problems];
     console.log(`✓ ${stats.total_products} prodotti attivi, ${stats.zeroed} disattivati, ${stats.total_rows} righe totali`);
+    console.log(`  ASIN verificato su ${stats.with_asin}/${stats.total_rows} righe · senza ASIN ${stats.without_asin}${stats.unmapped_skipped ? ` · esclusi perche' non mappati ${stats.unmapped_skipped}` : ""}`);
 
     const payload = {
       records,

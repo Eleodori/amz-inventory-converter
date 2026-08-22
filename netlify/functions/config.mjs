@@ -16,6 +16,7 @@ const DEFAULTS = {
   zeroKeepDays: 90,   // per quanti giorni continuare a inviare quantita' 0
   maxDeltaPct: 20,    // guard-rail: variazione massima di prodotti accettata
   minProducts: 100,   // guard-rail: sotto questa soglia il risultato e' sospetto
+  onlyMapped: false,  // true = pubblica solo gli EAN con ASIN verificato
   alertThresholds: { productsDeltaPct: 10, supplierDeltaPct: 20 },
 };
 

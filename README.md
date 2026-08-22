@@ -50,12 +50,13 @@ Campi compilati:
 |---|---|
 | `contribution_sku#1.value` | SKU (nella configurazione attuale coincide con l'EAN) |
 | `::record_action` | `Crea o modifica` |
-| `externally_assigned_product_identifier#1.type` / `.value` | `EAN` / il codice |
+| `externally_assigned_product_identifier#1.type` / `.value` | `EAN` / il codice, **solo se non c'è un ASIN verificato** |
 | `condition_type#1.value` | `Nuovo` |
 | `fulfillment_availability#1.fulfillment_channel_code` | `Gestito dal venditore (default)` |
 | `fulfillment_availability#1.quantity` | quantità (0 = disattivazione) |
 | `fulfillment_availability#1.lead_time_to_ship_max_days` | tempo di gestione |
-| `purchasable_offer[...]#1.our_price#1.schedule#1.value_with_tax` | prezzo, virgola decimale (punto su UK) |
+| `merchant_suggested_asin#1.value` | ASIN, **quando esiste un abbinamento verificato** |
+| `purchasable_offer[...]#1.our_price#1.schedule#1.value_with_tax` | prezzo — **cella numerica**, non testo (vedi sotto) |
 | `...minimum_seller_allowed_price...` | opzionale, se imposti un margine minimo nelle Regole |
 
 ### Quando Amazon cambia il template
@@ -75,6 +76,7 @@ Nel repo c'è un template di default (`_lib/templateSeed.mjs`, estratto da
 |---|---|
 | 🤖 **Auto** | file pronto, generazione manuale da FTP, quarantena, download .xlsx/.txt |
 | 📄 **Template** | carica il template Amazon, verifica i campi riconosciuti |
+| 🔗 **ASIN** | mappa verificata EAN→ASIN e registro delle SKU pubblicate |
 | ⚙️ **Regole** | stock minimo, tetto quantità, giorni di quantità 0, soglie del guard-rail |
 | ⚡ **Manuale** | percorso di riserva: carichi i CSV a mano se l'FTP non risponde |
 | 🏭 **Fornitori** | colonne del CSV, delimitatore, cartella FTP, fasce di rincaro |
@@ -128,6 +130,8 @@ L'espansione al formato template avviene solo al momento del download.
 |---|---|
 | `/api/config` | GET, POST |
 | `/api/template` | GET (`?full=1` per le intestazioni), POST, DELETE |
+| `/api/asinmap` | GET (`?full=1`), POST (CSV, `?replace=1`), DELETE |
+| `/api/published` | GET, POST (report offerte attive), DELETE |
 | `/api/ftp-convert` | GET (`?rows=0` per la sola diagnostica), POST (`{force}`) |
 | `/api/publish` | POST `{action:"promote"\|"discard"}` |
 | `/api/history` | GET, POST, DELETE `?id=` |
@@ -163,3 +167,51 @@ Il sito e le API sono **pubblici**: chiunque conosca l'URL può leggere `/api/co
 `previewData`). È una scelta consapevole. Se un domani vuoi chiuderlo senza dover digitare
 una password, la strada più comoda è un token nell'URL salvato nel browser al primo
 accesso.
+
+---
+
+## Due lezioni pagate care
+
+### Il prezzo nell'`.xlsx` deve essere una cella numerica
+
+Scrivendolo come testo con la virgola (`149,10`) Amazon rifiuta **tutte** le righe con
+l'errore **13006** — *"Formato cella errato. Imposta il formato in Excel su Numero"*.
+La regola della virgola decimale per il marketplace italiano vale per il **file di testo
+tab-delimited**, dove non esistono tipi di cella; in un `.xlsx` un numero è un numero e
+non ha separatore. È la regola giusta applicata al formato sbagliato: 7.917 righe
+rifiutate in un colpo.
+
+I test controllano il **tipo** della cella rileggendo il file generato, non solo il valore.
+
+### L'ASIN va scritto, non fatto indovinare
+
+Il template identifica il prodotto con l'ASIN **oppure** con un identificativo esterno.
+Mandando solo l'EAN, l'abbinamento alla pagina prodotto lo decide Amazon — e su 5.571
+offerte attive **94 erano finite sulla scheda di un pneumatico di misura o marca diversa**.
+Due sono state vendute: un Hankook 195/65 R15 estivo venduto come Michelin Alpin 7
+245/40 R18 invernale.
+
+Gli errori si concentravano nelle famiglie a variazioni (Turanza 6, AllSeasonContact 2):
+l'EAN si attacca al "figlio" sbagliato e la misura risulta vicina ma diversa. Ogni
+"Elimina e sostituisci" cancella e ricrea tutte le offerte, cioè **rifà l'abbinamento da
+zero per l'intero catalogo**: farlo ogni giorno moltiplicava le occasioni di sbagliare.
+
+Il rimedio è la mappa verificata: `audit_asin.mjs` confronta marca e misura del listino
+fornitore con il titolo della pagina Amazon, tiene solo le coppie coerenti, e il tool
+scrive quell'ASIN nel file. Le offerte così pinnate non possono più spostarsi.
+
+```bash
+node audit_asin.mjs report_offerte_attive.txt listino_deldo.csv
+# produce report/mappa_ean_asin_verificata.csv → si carica nel tab 🔗 ASIN
+```
+
+Nel tab ASIN c'è anche l'opzione **"pubblica solo gli EAN con ASIN verificato"**: il modo
+più sicuro, quello che non è verificato non va in vendita.
+
+### Il registro va inizializzato dalle offerte attive, non dal listino
+
+Il registro `amz-published` decide chi esce con quantità 0. Costruendolo dal listino del
+fornitore, le offerte attive su Amazon il cui EAN il fornitore non manda più non entravano
+mai nel registro: restavano acquistabili a tempo indeterminato su merce non ordinabile
+(92 casi). Si carica il report offerte attive dal tab 🔗 ASIN e quelle SKU entrano nel
+registro, uscendo a quantità 0 al primo file utile.
