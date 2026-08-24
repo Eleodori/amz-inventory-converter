@@ -119,7 +119,18 @@ function migrate(raw){
 function loadLocal(){try{return migrate(JSON.parse(localStorage.getItem(STORE_KEY))||null)}catch{return DEFAULT}}
 function persistLocal(c){localStorage.setItem(STORE_KEY,JSON.stringify(c))}
 async function loadRemote(){try{const r=await fetch("/api/config");if(!r.ok)return null;return await r.json();}catch{return null;}}
-async function persistRemote(c){try{await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});}catch(e){console.warn("Config remote save failed:",e);}}
+async function persistRemote(c){
+  // Prima ingoiava tutto in un catch: un rifiuto del server (conflitto di
+  // versione, blacklist che si accorcia) risultava indistinguibile da un
+  // salvataggio riuscito. Ora l'esito torna al chiamante.
+  try{
+    const r=await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});
+    const d=await r.json().catch(()=>({}));
+    if(r.status===409) return {ok:false,rifiutato:true,...d};
+    if(!r.ok) return {ok:false,errore:d.error||("HTTP "+r.status)};
+    return {ok:true,rev:d.rev};
+  }catch(e){ return {ok:false,errore:e.message}; }
+}
 // Parser che gestisce i campi quotati: con il vecchio split(delimiter) bastava
 // un campo tipo "Pirelli; P Zero" per far slittare tutte le colonne successive
 // e pubblicare un prezzo letto dalla colonna sbagliata, senza alcun errore.
@@ -647,7 +658,7 @@ function MarketplacesTab({config:c,save}){
 }
 
 // ─── BlacklistTab ────────────────────────────────────────────────────────────
-function BlacklistTab({config:c,save}){
+function BlacklistTab({config:c,save,pronto=true}){
   const[inp,sInp]=useState("");
   const[esito,sEsito]=useState(null);
 
@@ -682,11 +693,14 @@ function BlacklistTab({config:c,save}){
   const pulisci=()=>{
     const ok=[...new Set(c.blacklist.map(e=>normalizeEAN(e)).filter(Boolean))];
     sEsito({letti:c.blacklist.length,aggiunti:0,gia:0,ripetuti:doppi,scartati:sporche.map(e=>String(e).slice(0,24))});
-    save({...c,blacklist:ok});
+    save({...c,blacklist:ok},{shrinkOk:true});
   };
 
-  const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)});
-  const clr=()=>save({...c,blacklist:[]});
+  // Queste tre riducono la blacklist su richiesta esplicita: il server accetta
+  // un accorciamento solo con questo flag, cosi' un salvataggio qualunque che
+  // arrivi con una blacklist piu' corta viene rifiutato invece di cancellare.
+  const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)},{shrinkOk:true});
+  const clr=()=>{ if(confirm(`Svuotare la blacklist? Perderai tutti i ${c.blacklist.length} EAN.`)) save({...c,blacklist:[]},{shrinkOk:true}) };
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -709,7 +723,7 @@ function BlacklistTab({config:c,save}){
         <label style={S.label}>Aggiungi EAN — il separatore non conta: righe, virgole, punti e virgola, ×, spazi</label>
         <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620\n\noppure: 5420068605613\u00d75420068605620\u00d7..."} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
         <div style={{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn>
+          <Btn v="ok" onClick={add} disabled={!pronto}>+ Aggiungi alla blacklist</Btn>
           <span style={{fontSize:11,color:"var(--text-muted)"}}>
             Gli EAN già presenti e quelli ripetuti vengono ignorati: scriverli due volte non li duplica.
           </span>
@@ -1797,6 +1811,9 @@ function App(){
   const[tab,sTab]=useState("auto");
   const[ok,sOk]=useState(false);
   const[syncStatus,setSyncStatus]=useState("idle");
+  const[pronto,setPronto]=useState(false);   // true = config del server ricevuta, si puo' scrivere
+  const[rev,setRev]=useState(0);
+  const[errSync,setErrSync]=useState(null);
   const[theme,sTheme]=useState(()=>localStorage.getItem("amz-theme")||"dark");
   const[alertCount,setAlertCount]=useState(0);
   const[showAlerts,setShowAlerts]=useState(false);
@@ -1804,20 +1821,45 @@ function App(){
   useEffect(()=>{document.body.setAttribute("data-theme",theme);},[theme]);
 
   useEffect(()=>{
+    // La copia locale serve solo a far vedere subito qualcosa. Finche' non
+    // e' arrivata quella del server la pagina NON e' scrivibile: prima lo era,
+    // e un click nel primo secondo salvava la configurazione vecchia sopra
+    // quella buona (113 EAN di blacklist persi cosi', senza un avviso).
     const local=loadLocal();sC(local);sOk(true);setSyncStatus("syncing");
     loadRemote().then(remote=>{
-      if(remote){const migrated=migrate(remote);sC(migrated);persistLocal(migrated);setSyncStatus("synced");}
-      else setSyncStatus("idle");
-    }).catch(()=>setSyncStatus("error"));
+      if(remote){const migrated=migrate(remote);sC(migrated);persistLocal(migrated);setRev(remote.rev||0);setPronto(true);setSyncStatus("synced");}
+      else {setPronto(true);setSyncStatus("idle");}   // nessuna config sul server: la locale e' l'unica cosa che c'e'
+    }).catch(()=>{setSyncStatus("error");setErrSync("Non riesco a leggere la configurazione dal server: la pagina resta in sola lettura per non sovrascrivere i dati buoni. Ricarica.");});
     // Conta alert non letti
     fetch("/api/alerts").then(r=>r.json()).then(alerts=>{
       setAlertCount((alerts||[]).filter(a=>!a.read).length);
     }).catch(()=>{});
   },[]);
 
-  const save=cfg=>{
+  const save=(cfg,opts={})=>{
+    if(!pronto){
+      setErrSync("Aspetta un istante: sto ancora leggendo la configurazione dal server. Salvare adesso sovrascriverebbe i dati buoni con quelli in cache del browser.");
+      return;
+    }
+    setErrSync(null);
     sC(cfg);persistLocal(cfg);setSyncStatus("syncing");
-    persistRemote(cfg).then(()=>setSyncStatus("synced")).catch(()=>setSyncStatus("error"));
+    persistRemote({...cfg,rev,allowBlacklistShrink:!!opts.shrinkOk}).then(r=>{
+      if(r.ok){ setRev(r.rev); setSyncStatus("synced"); return }
+      setSyncStatus("error");
+      // Rifiutato: rimettiamo in pagina quello che c'e' davvero sul server,
+      // cosi' non resta a schermo una modifica che non e' stata salvata.
+      if(r.current){ const m=migrate(r.current); sC(m); persistLocal(m); setRev(r.current.rev||0); }
+      if(r.blacklistShrink){
+        const b=r.blacklistShrink;
+        setErrSync(`Salvataggio rifiutato: la blacklist sarebbe passata da ${b.prima} a ${b.dopo} EAN senza che tu l'abbia chiesto. `+
+          `Ho ricaricato la versione del server, non hai perso niente. `+
+          (b.persiTotale?`EAN che sarebbero sparita: ${b.persi.join(", ")}${b.persiTotale>b.persi.length?` e altri ${b.persiTotale-b.persi.length}`:""}.`:""));
+      } else if(r.rifiutato){
+        setErrSync("Salvataggio rifiutato: sul server c'era una versione piu' recente, probabilmente salvata da un'altra scheda o da un altro browser. Ho ricaricato quella del server: rifai la modifica.");
+      } else {
+        setErrSync("Salvataggio non riuscito: "+(r.errore||"errore sconosciuto")+". La modifica NON e' sul server.");
+      }
+    });
   };
   const toggleTheme=()=>{const t=theme==="dark"?"light":"dark";sTheme(t);localStorage.setItem("amz-theme",t);};
 
@@ -1865,13 +1907,31 @@ function App(){
         </div>
       </div>
       <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
+        {errSync&&(
+          <Card accent="#ef4444" style={{marginBottom:14}}>
+            <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+              <span style={{fontSize:20}}>🛑</span>
+              <div style={{flex:1}}>
+                <p style={{margin:0,color:"#ef4444",fontSize:13,lineHeight:1.6}}>{errSync}</p>
+                <div style={{marginTop:8}}><Btn v="ghost" onClick={()=>setErrSync(null)} style={{fontSize:11}}>Ho capito</Btn></div>
+              </div>
+            </div>
+          </Card>
+        )}
+        {!pronto&&!errSync&&(
+          <Card style={{marginBottom:14}}>
+            <p style={{margin:0,color:"var(--text-muted)",fontSize:12}}>
+              ⏳ Sto leggendo la configurazione dal server: le modifiche sono bloccate per un istante, così quello che vedi non sovrascrive i dati buoni.
+            </p>
+          </Card>
+        )}
         {tab==="auto"&&<AutoTab config={c}/>}
         {tab==="template"&&<TemplateTab/>}
         {tab==="asin"&&<AsinTab config={c} save={save}/>}
         {tab==="rules"&&<RulesTab config={c} save={save}/>}
         {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
         {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
-        {tab==="blacklist"&&<BlacklistTab config={c} save={save}/>}
+        {tab==="blacklist"&&<BlacklistTab config={c} save={save} pronto={pronto}/>}
         {tab==="convert"&&<ConvertTab config={c}/>}
         {tab==="history"&&<HistoryTab/>}
       </div>

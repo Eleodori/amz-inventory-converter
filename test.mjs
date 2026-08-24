@@ -316,6 +316,57 @@ if (fs.existsSync(REF)) {
   console.log("  – file di riferimento non disponibile, salto");
 }
 
+console.log("\n── /api/config: scritture stantie e blacklist che si accorcia ──");
+// Riproduzione della tabella di decisione dell'handler POST. La corsa vera:
+// il client mostrava subito la copia di localStorage ed era gia' scrivibile
+// mentre la GET era in volo; un click nel primo secondo salvava la config
+// vecchia sopra quella buona, e 113 EAN di blacklist sparivano in silenzio.
+function decidi(stored, body) {
+  const storedRev = stored?.rev || 0;
+  if (stored && body.rev !== undefined && body.rev !== storedRev) return { esito: "conflitto", storedRev };
+  const prima = stored?.blacklist?.length || 0;
+  const dopo = body.blacklist?.length || 0;
+  if (prima > dopo && !body.allowBlacklistShrink) return { esito: "shrink", prima, dopo };
+  return { esito: "ok", rev: storedRev + 1 };
+}
+const SRV = { rev: 7, blacklist: ["a", "b", "c"] };
+t("scrittura con la rev corrente passa", () => {
+  assert.equal(decidi(SRV, { rev: 7, blacklist: ["a","b","c","d"] }).esito, "ok");
+});
+t("scrittura con rev vecchia viene rifiutata", () => {
+  const d = decidi(SRV, { rev: 3, blacklist: ["a","b","c","d"] });
+  assert.equal(d.esito, "conflitto");
+  assert.equal(d.storedRev, 7);
+});
+t("blacklist piu' corta senza intento: rifiutata", () => {
+  const d = decidi(SRV, { rev: 7, blacklist: ["a"] });
+  assert.equal(d.esito, "shrink");
+  assert.equal(d.prima, 3); assert.equal(d.dopo, 1);
+});
+t("blacklist piu' corta con intento esplicito: passa", () => {
+  assert.equal(decidi(SRV, { rev: 7, blacklist: ["a"], allowBlacklistShrink: true }).esito, "ok");
+});
+t("un salvataggio da un altro tab che non tocca la blacklist passa", () => {
+  assert.equal(decidi(SRV, { rev: 7, blacklist: ["a","b","c"], minStock: 8 }).esito, "ok");
+});
+t("primo salvataggio in assoluto (server vuoto) passa", () => {
+  assert.equal(decidi(null, { blacklist: [] }).esito, "ok");
+});
+t("la rev avanza a ogni scrittura accettata", () => {
+  assert.equal(decidi(SRV, { rev: 7, blacklist: ["a","b","c"] }).rev, 8);
+});
+t("l'handler e il client hanno davvero le guardie", () => {
+  const srv = fs.readFileSync("netlify/functions/config.mjs", "utf8");
+  assert.ok(/body\.rev !== storedRev/.test(srv), "config.mjs non controlla la rev");
+  assert.ok(/!body\.allowBlacklistShrink/.test(srv), "config.mjs non protegge la blacklist");
+  assert.ok(/rev: storedRev \+ 1/.test(srv), "config.mjs non incrementa la rev");
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.ok(/if\(!pronto\)\{/.test(html), "il client scrive ancora prima della sincronizzazione");
+  assert.ok(/allowBlacklistShrink:!!opts\.shrinkOk/.test(html), "il client non dichiara l'intento di ridurre");
+  assert.ok(/\{shrinkOk:true\}/.test(html), "nessuna azione dichiara l'intento di ridurre");
+  assert.ok(/r\.status===409/.test(html), "il client non gestisce il rifiuto del server");
+});
+
 console.log("\n── blacklist: separatori e duplicati ──");
 t("lo split della blacklist accetta qualsiasi separatore", () => {
   const html = fs.readFileSync("index.html", "utf8");
