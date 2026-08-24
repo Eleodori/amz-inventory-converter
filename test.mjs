@@ -316,6 +316,45 @@ if (fs.existsSync(REF)) {
   console.log("  – file di riferimento non disponibile, salto");
 }
 
+console.log("\n── blacklist: separatori e duplicati ──");
+t("lo split della blacklist accetta qualsiasi separatore", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const tab = html.slice(html.indexOf("function BlacklistTab"), html.indexOf("// ─── ConvertTab"));
+  // Il vecchio /[\n,;\s]+/ non spezzava su "x" moltiplicativo: una lista
+  // incollata con quel separatore diventava un unico token accettato perche'
+  // lungo >= 8, e la blacklist non bloccava piu' niente.
+  assert.ok(!/inp\.split\(\/\[\\n,;\\s\]\+\/\)/.test(tab), "usa ancora il vecchio split");
+  assert.ok(/inp\.split\(\/\\D\+\/\)/.test(tab), "non spezza su tutti i non-cifra");
+  assert.ok(/normalizeEAN\(g\)/.test(tab), "non valida gli EAN prima di inserirli");
+  assert.ok(/new Set\(\[\.\.\.c\.blacklist,\.\.\.nuovi\]\)/.test(tab), "non deduplica in scrittura");
+  assert.ok(!/e\.length>=8/.test(tab), "accetta ancora qualsiasi token lungo 8+");
+});
+t("la logica di add non duplica: stessa lista due volte", () => {
+  // riproduzione della logica del tab, tenuta in sincrono col commento sopra
+  const norm = e => (/^\d+$/.test(e) && [8,12,13,14].includes(e.length)) ? e : null;
+  const run = (lista, esistenti) => {
+    const presenti = new Set(esistenti), visti = new Set(), nuovi = [];
+    let gia = 0, rip = 0;
+    for (const g of lista.split(/\D+/).filter(Boolean)) {
+      const e = norm(g); if (!e) continue;
+      if (visti.has(e)) { rip++; continue }
+      visti.add(e);
+      if (presenti.has(e)) { gia++; continue }
+      nuovi.push(e);
+    }
+    return { nuovi, gia, rip, finale: [...new Set([...esistenti, ...nuovi])] };
+  };
+  const L = "3286342052717\u00d78808563590424\u00d73286342052717"; // uno ripetuto
+  const a = run(L, []);
+  assert.deepEqual(a.nuovi, ["3286342052717", "8808563590424"]);
+  assert.equal(a.rip, 1);
+  assert.equal(a.finale.length, 2);
+  const b = run(L, a.finale);       // stessa lista incollata di nuovo
+  assert.equal(b.nuovi.length, 0);
+  assert.equal(b.gia, 2);
+  assert.equal(b.finale.length, 2); // niente duplicati
+});
+
 console.log("\n── confronto col file precedente (banner solo-EAN) ──");
 t("prevSnapshot e' null-safe al primo giro", () => {
   assert.equal(prevSnapshot(null), null);
@@ -336,6 +375,7 @@ t("prevSnapshot mette null sui campi assenti, non undefined", () => {
 });
 t("il banner non e' piu' arancione a prescindere", () => {
   const html = fs.readFileSync("index.html", "utf8");
+  // la vecchia versione apriva la Card con accent fisso subito dopo il test su without_asin
   assert.ok(!/without_asin>0&&\(\s*<Card accent="#f59e0b"/.test(html),
     "il banner usa ancora un accent arancione fisso");
   assert.ok(html.includes("prev?.without_asin"), "il banner non legge il valore precedente");

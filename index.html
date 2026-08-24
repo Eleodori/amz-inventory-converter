@@ -649,7 +649,42 @@ function MarketplacesTab({config:c,save}){
 // ─── BlacklistTab ────────────────────────────────────────────────────────────
 function BlacklistTab({config:c,save}){
   const[inp,sInp]=useState("");
-  const add=()=>{const ne=inp.split(/[\n,;\s]+/).map(e=>e.trim()).filter(e=>e.length>=8&&!c.blacklist.includes(e));if(!ne.length)return;save({...c,blacklist:[...c.blacklist,...ne]});sInp("");};
+  const[esito,sEsito]=useState(null);
+
+  // Qualunque carattere non numerico separa. Prima lo split era /[\n,;\s]+/ con
+  // il solo filtro length>=8: una lista incollata con un separatore insolito
+  // (per esempio "\u00d7") diventava UN unico token di migliaia di caratteri,
+  // accettato perche' lungo, e la blacklist sembrava piena senza bloccare nulla.
+  // In piu' il controllo sui duplicati guardava solo la lista gia' salvata,
+  // quindi lo stesso EAN ripetuto nello stesso incolla entrava due volte.
+  const add=()=>{
+    const grezzi=inp.split(/\D+/).filter(Boolean);
+    const presenti=new Set(c.blacklist), visti=new Set();
+    const scartati=[], nuovi=[]; let ripetuti=0, gia=0;
+    for(const g of grezzi){
+      const e=normalizeEAN(g);
+      if(!e){ scartati.push(g); continue }
+      if(visti.has(e)){ ripetuti++; continue }
+      visti.add(e);
+      if(presenti.has(e)){ gia++; continue }
+      nuovi.push(e);
+    }
+    sEsito({letti:grezzi.length,aggiunti:nuovi.length,gia,ripetuti,scartati});
+    // Set anche in scrittura: ripara una lista che contenga gia' dei doppioni.
+    if(nuovi.length) save({...c,blacklist:[...new Set([...c.blacklist,...nuovi])]});
+    if(nuovi.length||gia||ripetuti) sInp("");
+  };
+
+  // Riparazione della lista salvata: doppioni o voci non valide finite dentro
+  // prima del fix qui sopra.
+  const sporche=c.blacklist.filter(e=>!normalizeEAN(e));
+  const doppi=c.blacklist.length-new Set(c.blacklist).size;
+  const pulisci=()=>{
+    const ok=[...new Set(c.blacklist.map(e=>normalizeEAN(e)).filter(Boolean))];
+    sEsito({letti:c.blacklist.length,aggiunti:0,gia:0,ripetuti:doppi,scartati:sporche.map(e=>String(e).slice(0,24))});
+    save({...c,blacklist:ok});
+  };
+
   const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)});
   const clr=()=>save({...c,blacklist:[]});
   return(
@@ -658,11 +693,45 @@ function BlacklistTab({config:c,save}){
         <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
         {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
       </div>
+      {(sporche.length>0||doppi>0)&&(
+        <Card accent="#f59e0b">
+          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{color:"#f59e0b",fontSize:13,flex:1,minWidth:220}}>
+              ⚠️ La lista salvata contiene {doppi>0?`${doppi} ${doppi===1?"doppione":"doppioni"}`:""}{doppi>0&&sporche.length>0?" e ":""}
+              {sporche.length>0?`${sporche.length} ${sporche.length===1?"voce che non è un EAN valido":"voci che non sono EAN validi"}`:""}. Non bloccano niente, ma vanno tolte.
+            </span>
+            <Btn v="ok" onClick={pulisci} style={{fontSize:12}}>🧹 Pulisci la lista</Btn>
+          </div>
+        </Card>
+      )}
+
       <Card>
-        <label style={S.label}>Aggiungi EAN (uno per riga o separati da virgola)</label>
-        <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620"} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
-        <div style={{marginTop:8}}><Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn></div>
+        <label style={S.label}>Aggiungi EAN — il separatore non conta: righe, virgole, punti e virgola, ×, spazi</label>
+        <textarea value={inp} onChange={e=>sInp(e.target.value)} rows={4} placeholder={"5420068605613\n5420068605620\n\noppure: 5420068605613\u00d75420068605620\u00d7..."} style={{...S.input,resize:"vertical",fontFamily:"monospace",fontSize:13}}/>
+        <div style={{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <Btn v="ok" onClick={add}>+ Aggiungi alla blacklist</Btn>
+          <span style={{fontSize:11,color:"var(--text-muted)"}}>
+            Gli EAN già presenti e quelli ripetuti vengono ignorati: scriverli due volte non li duplica.
+          </span>
+        </div>
       </Card>
+
+      {esito&&(
+        <Card accent={esito.scartati.length?"#f59e0b":"#10b981"}>
+          <p style={{margin:0,fontSize:13,lineHeight:1.7,color:"var(--text)"}}>
+            Letti <strong>{esito.letti.toLocaleString()}</strong> numeri:
+            {" "}<strong style={{color:"#10b981"}}>{esito.aggiunti.toLocaleString()} aggiunti</strong>
+            {esito.gia>0&&<> · {esito.gia.toLocaleString()} già in lista</>}
+            {esito.ripetuti>0&&<> · {esito.ripetuti.toLocaleString()} ripetuti nell’incolla</>}
+            {esito.scartati.length>0&&<> · <span style={{color:"#f59e0b"}}>{esito.scartati.length.toLocaleString()} scartati</span> perché non sono EAN validi</>}
+            {esito.scartati.length>0&&(
+              <span style={{display:"block",marginTop:6,fontFamily:"monospace",fontSize:11,color:"var(--text-muted)",wordBreak:"break-all"}}>
+                {esito.scartati.slice(0,8).join(" \u00b7 ")}{esito.scartati.length>8?` \u2026 e altri ${esito.scartati.length-8}`:""}
+              </span>
+            )}
+          </p>
+        </Card>
+      )}
       {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
         {c.blacklist.map(ean=>(
           <span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
