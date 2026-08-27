@@ -187,7 +187,48 @@ const VOCAB={
   fr_FR:{create:"Créer ou mettre à jour",ean:"EAN",conditionNew:"Neuf",channelMerchant:"Expédié par le vendeur (par défaut)"},
   es_ES:{create:"Crear o actualizar",ean:"EAN",conditionNew:"Nuevo",channelMerchant:"Gestionado por el vendedor (predeterminado)"}
 };
-function vocabFor(t){return VOCAB[t&&t.contentLanguageTag]||VOCAB.it_IT}
+const VOCAB_ATTRS={
+  action:/^::record_action$/,
+  extIdType:/^externally_assigned_product_identifier#1\.type$/,
+  condition:/^condition_type#1\.value$/,
+  channel:/^fulfillment_availability#1\.fulfillment_channel_code$/,
+};
+// Il vocabolario giusto sta nel template, foglio "Dropdown Lists": riga 3 il nome
+// tecnico, righe 4+ i valori nella lingua del file. La tabella VOCAB e' hardcodata
+// e le stringhe non italiane non sono verificate: se una non combacia Amazon
+// rifiuta tutte le righe. Quindi si usa solo come ultima spiaggia.
+function vocabFromLists(l){
+  if(!l)return null;
+  const a=l.action,c=l.condition,ch=l.channel,e=l.extIdType;
+  if(!(a&&a.length)||!(c&&c.length)||!(ch&&ch.length)||!(e&&e.length))return null;
+  const ean=e.find(v=>/^ean$/i.test(String(v).trim()));
+  if(!ean||a.length<2)return null;
+  return{create:a[0],delete:a[a.length-1],ean,conditionNew:c[0],channelMerchant:ch[0],origine:"template"};
+}
+function vocabFor(t){
+  const dal=vocabFromLists(t&&t.vocabLists);
+  if(dal)return dal;
+  const lang=t&&t.contentLanguageTag;
+  const f=VOCAB[lang]||VOCAB.it_IT;
+  return{...f,origine:VOCAB[lang]?("tabella:"+lang):"tabella:it_IT (lingua non riconosciuta)"};
+}
+function extractVocabLists(wb){
+  const name=wb.SheetNames.find(n=>n==="Dropdown Lists")||wb.SheetNames.find(n=>/dropdown|tendina|listas|listes/i.test(n));
+  if(!name)return null;
+  const sh=wb.Sheets[name]; if(!sh||!sh["!ref"])return null;
+  const rng=XLSX.utils.decode_range(sh["!ref"]);
+  const at=(r,c)=>{const k=XLSX.utils.encode_cell({r,c});return sh[k]?String(sh[k].v).trim():""};
+  const out={};
+  for(let c=0;c<=rng.e.c;c++){
+    const attr=at(2,c); if(!attr)continue;
+    for(const f in VOCAB_ATTRS){
+      if(out[f]||!VOCAB_ATTRS[f].test(attr))continue;
+      const vals=[]; for(let r=3;r<=rng.e.r;r++){const v=at(r,c); if(v==="")break; vals.push(v)}
+      if(vals.length)out[f]=vals;
+    }
+  }
+  return Object.keys(out).length?out:null;
+}
 
 function resolveColumns(t){
   const attrs=((t.headerRows||[])[(t.attributeRow||5)-1]||[]).map(v=>String(v==null?"":v).trim());
@@ -277,11 +318,15 @@ function dlBlob(data,filename,mime){
 async function parseTemplateFile(file){
   if(typeof XLSX==="undefined")throw new Error("Libreria Excel non caricata, ricarica la pagina");
   const buf=await file.arrayBuffer();
-  const wb=XLSX.read(buf,{type:"array",sheetRows:6});
+  // Prima leggevamo con sheetRows:6, che tronca ogni foglio: le liste dei valori
+  // validi scendono oltre la sesta riga (condition_type ne ha 13) e sarebbero
+  // arrivate mutilate. Il file e' mezzo megabyte, leggerlo intero non e' un problema.
+  const wb=XLSX.read(buf,{type:"array"});
   const sheetName=wb.SheetNames.indexOf("Modello")>=0?"Modello":(wb.SheetNames.find(x=>/model|modello|template|vorlage|plantilla|modèle/i.test(x))||wb.SheetNames[0]);
   const ws=wb.Sheets[sheetName];
   if(!ws)throw new Error("Foglio dati non trovato nel file");
-  const aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:"",blankrows:true});
+  const aoaTutto=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:"",blankrows:true});
+  const aoa=aoaTutto.slice(0,6);   // del foglio Modello ci servono solo le intestazioni
   while(aoa.length<6)aoa.push([]);
   const a1=String((aoa[0]||[])[0]||"");
   if(a1.indexOf("settings=")!==0)throw new Error('La cella A1 non inizia con "settings=": non sembra un template Amazon');
@@ -301,8 +346,11 @@ async function parseTemplateFile(file){
     labelRow:labelRow,attributeRow:attributeRow,dataRow:dataRow,
     marketplaceId:str(/primaryMarketplaceId=amzn1\.mp\.o\.([A-Z0-9]+)/),
     contentLanguageTag:str(/contentLanguageTag=([a-zA-Z_]+)/),
-    headerRows:[pad(aoa[0]),pad(aoa[1]),pad(aoa[2]),pad(aoa[3]),pad(aoa[4]),pad(aoa[5])]
+    headerRows:[pad(aoa[0]),pad(aoa[1]),pad(aoa[2]),pad(aoa[3]),pad(aoa[4]),pad(aoa[5])],
+    vocabLists:extractVocabLists(wb)
   };
+  if(!vocabFromLists(t.vocabLists))
+    throw new Error("Nel file non trovo il foglio \"Dropdown Lists\" con i valori validi (azione, condizione, canale, tipo di ID). Scarica il template completo da Seller Central, non un file salvato o riesportato.");
   const rc=resolveColumns(t);
   if(rc.missing.length)throw new Error("Colonne obbligatorie non trovate: "+rc.missing.map(m=>FIELD_LABELS[m]||m).join(", "));
   return t;
@@ -1247,6 +1295,26 @@ function TemplateTab(){
             </div>
           ))}
         </div>
+
+        {info.vocab&&(()=>{
+          const v=info.vocab, dalTemplate=v.origine==="template";
+          return(
+            <div style={{marginTop:16}}>
+              <label style={{...S.label,marginBottom:8}}>Valori che verranno scritti nel file</label>
+              <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"12px 14px",fontSize:12,lineHeight:1.9,fontFamily:"monospace",color:"var(--text)"}}>
+                <div>::record_action → <strong>{v.create}</strong></div>
+                <div>condition_type → <strong>{v.conditionNew}</strong></div>
+                <div>fulfillment_channel_code → <strong>{v.channelMerchant}</strong></div>
+                <div>identificativo esterno → <strong>{v.ean}</strong></div>
+              </div>
+              <p style={{margin:"8px 0 0",fontSize:11,color:dalTemplate?"#10b981":"#f59e0b",lineHeight:1.6}}>
+                {dalTemplate
+                  ? "✓ Letti dal foglio “Dropdown Lists” del template, quindi sono esattamente quelli che Amazon si aspetta per questo marketplace e questa lingua."
+                  : `⚠️ Il template caricato non porta le liste dei valori validi, sto usando una tabella interna (${v.origine}). Su un marketplace non italiano queste stringhe non sono verificate e Amazon potrebbe rifiutare tutte le righe: ricarica il template scaricandolo da Seller Central.`}
+              </p>
+            </div>
+          );
+        })()}
 
         <label style={{...S.label,margin:"16px 0 8px"}}>Campi riconosciuti</label>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>

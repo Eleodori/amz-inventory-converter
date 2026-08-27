@@ -7,7 +7,7 @@ import assert from "node:assert";
 import fs from "node:fs";
 import XLSX from "xlsx";
 import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
-import { seedTemplate, resolveColumns } from "./netlify/functions/_lib/template.mjs";
+import { seedTemplate, resolveColumns, vocabFor, vocabFromLists, extractVocabLists } from "./netlify/functions/_lib/template.mjs";
 import { parseAsinMapCsv, asinMapInfo } from "./netlify/functions/_lib/asinmap.mjs";
 import { prevSnapshot } from "./netlify/functions/_lib/stores.mjs";
 
@@ -315,6 +315,66 @@ if (fs.existsSync(REF)) {
 } else {
   console.log("  – file di riferimento non disponibile, salto");
 }
+
+console.log("\n── vocabolario preso dal template, non indovinato ──");
+t("dal template IT esce esattamente il vocabolario italiano", () => {
+  const v = vocabFor(seedTemplate());
+  assert.equal(v.create, "Crea o modifica");
+  assert.equal(v.delete, "Elimina");
+  assert.equal(v.ean, "EAN");
+  assert.equal(v.conditionNew, "Nuovo");
+  assert.equal(v.channelMerchant, "Gestito dal venditore (default)");
+  assert.equal(v.origine, "template", "sta ancora usando la tabella hardcodata");
+});
+t("le liste si estraggono dal foglio Dropdown Lists del file reale", () => {
+  if (!fs.existsSync(REF)) { console.log("      (file di riferimento assente, salto)"); return }
+  const wb = XLSX.read(fs.readFileSync(REF), { type: "buffer" });
+  const l = extractVocabLists(wb, XLSX);
+  assert.ok(l, "nessuna lista estratta");
+  assert.deepEqual(l.action, ["Crea o modifica", "Elimina"]);
+  assert.equal(l.condition[0], "Nuovo");
+  assert.equal(l.channel[0], "Gestito dal venditore (default)");
+  assert.ok(l.extIdType.includes("EAN"));
+});
+t("un template tedesco NON ha bisogno di stringhe scritte da noi", () => {
+  // Liste come le porterebbe un template DE. I valori esatti non li conosciamo:
+  // il punto e' che il tool li prende dal file, qualunque siano.
+  const de = {
+    contentLanguageTag: "de_DE",
+    vocabLists: {
+      action:    ["QUALUNQUE_COSA_SCRIVA_AMAZON", "UND_DAS_ANDERE"],
+      condition: ["Neu", "Neu - geöffnete Verpackung", "Gebraucht - Wie neu"],
+      channel:   ["Vom Verkäufer versandt", "Versand durch Amazon (EU)"],
+      extIdType: ["EAN", "GTIN", "UPC"],
+    },
+  };
+  const v = vocabFor(de);
+  assert.equal(v.create, "QUALUNQUE_COSA_SCRIVA_AMAZON");
+  assert.equal(v.delete, "UND_DAS_ANDERE");
+  assert.equal(v.conditionNew, "Neu");
+  assert.equal(v.channelMerchant, "Vom Verkäufer versandt");
+  assert.equal(v.ean, "EAN");
+  assert.equal(v.origine, "template");
+});
+t("liste incomplete: si ripiega sulla tabella e lo dichiara", () => {
+  assert.equal(vocabFromLists(null), null);
+  assert.equal(vocabFromLists({ action: ["solo uno"], condition: ["x"], channel: ["y"], extIdType: ["EAN"] }), null,
+    "con una sola azione non si puo' distinguere creazione e cancellazione");
+  assert.equal(vocabFromLists({ action: ["a","b"], condition: ["x"], channel: ["y"], extIdType: ["UPC"] }), null,
+    "senza EAN nella lista non possiamo identificare il prodotto");
+  const v = vocabFor({ contentLanguageTag: "de_DE" });
+  assert.ok(v.origine.startsWith("tabella:"), "non dichiara che sta indovinando");
+});
+t("lingua sconosciuta: ripiega sull'italiano dicendolo", () => {
+  const v = vocabFor({ contentLanguageTag: "pl_PL" });
+  assert.equal(v.create, "Crea o modifica");
+  assert.ok(/lingua non riconosciuta/.test(v.origine));
+});
+t("il seed porta le liste con se'", () => {
+  const t2 = seedTemplate();
+  assert.ok(t2.vocabLists, "il seed non ha vocabLists: su un template vecchio si torna a indovinare");
+  assert.equal(t2.vocabLists.condition.length, 13);
+});
 
 console.log("\n── /api/config: scritture stantie e blacklist che si accorcia ──");
 // Riproduzione della tabella di decisione dell'handler POST. La corsa vera:

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import assert from "node:assert";
 import XLSX from "xlsx";
 import * as babel from "@babel/core";
-import { seedTemplate } from "./netlify/functions/_lib/template.mjs";
+import { seedTemplate, vocabFor as srvVocabFor } from "./netlify/functions/_lib/template.mjs";
 import { expandRows, buildTxt } from "./netlify/functions/_lib/converter.mjs";
 
 const html = fs.readFileSync("index.html", "utf8");
@@ -17,7 +17,7 @@ const start = code.indexOf("// ─── Formato template Amazon");
 const end = code.indexOf("// ─── Mini bar chart");
 assert.ok(start > 0 && end > start, "blocco helper non individuato");
 const helpers = code.slice(start, end);
-const out = babel.transformSync(helpers + "\nglobalThis.__H={parseTemplateFile,expandRecords,buildTxt,resolveColumns,normalizeEAN:typeof normalizeEAN!=='undefined'?normalizeEAN:null,fmtPrice};",
+const out = babel.transformSync(helpers + "\nglobalThis.__H={parseTemplateFile,expandRecords,buildTxt,resolveColumns,normalizeEAN:typeof normalizeEAN!=='undefined'?normalizeEAN:null,fmtPrice,vocabFor,vocabFromLists,extractVocabLists};",
   { presets: [["@babel/preset-react", { runtime: "classic" }]], configFile: false, babelrc: false }).code;
 globalThis.XLSX = XLSX;
 globalThis.fetch = async () => { throw new Error("no fetch in test"); };
@@ -80,6 +80,35 @@ const notTemplate = XLSX.write((() => { const wb = XLSX.utils.book_new(); XLSX.u
 t("un xlsx qualsiasi viene rifiutato", async () => {
   return H.parseTemplateFile({ name: "x.xlsx", arrayBuffer: async () => notTemplate.buffer.slice(notTemplate.byteOffset, notTemplate.byteOffset + notTemplate.byteLength) })
     .then(() => { throw new Error("avrebbe dovuto lanciare"); }, () => {});
+});
+
+console.log("\n── vocabolario: client e server d'accordo ──");
+t("parseTemplateFile cattura le liste dei valori validi", () => {
+  assert.ok(parsed.vocabLists, "vocabLists non catturate dal file");
+  assert.deepEqual(parsed.vocabLists.action, ["Crea o modifica", "Elimina"]);
+  assert.equal(parsed.vocabLists.condition.length, 13);
+});
+t("client e server derivano lo stesso vocabolario", () => {
+  const a = H.vocabFor(parsed), b = srvVocabFor(seed);
+  assert.equal(a.create, b.create);
+  assert.equal(a.delete, b.delete);
+  assert.equal(a.ean, b.ean);
+  assert.equal(a.conditionNew, b.conditionNew);
+  assert.equal(a.channelMerchant, b.channelMerchant);
+  assert.equal(a.origine, "template");
+  assert.equal(b.origine, "template");
+});
+t("il client rifiuta un template senza le liste", async () => {
+  // stesso file ma senza il foglio Dropdown Lists: deve fallire con un messaggio
+  // chiaro invece di ripiegare in silenzio su stringhe scritte a mano.
+  const wb2 = XLSX.read(bytes, { type: "buffer" });
+  delete wb2.Sheets["Dropdown Lists"];
+  wb2.SheetNames = wb2.SheetNames.filter(n => n !== "Dropdown Lists");
+  const buf = XLSX.write(wb2, { type: "buffer", bookType: "xlsx" });
+  const f = { name: "senza_liste.xlsx", arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) };
+  let msg = null;
+  try { await H.parseTemplateFile(f) } catch (e) { msg = e.message }
+  assert.ok(msg && /Dropdown Lists/.test(msg), "non segnala le liste mancanti: " + msg);
 });
 
 console.log(`\n${fail === 0 ? "✅" : "❌"}  ${pass} test passati, ${fail} falliti\n`);

@@ -49,9 +49,78 @@ const VOCAB = {
   es_ES: { create: "Crear o actualizar", delete: "Eliminar", ean: "EAN", conditionNew: "Nuevo", channelMerchant: "Gestionado por el vendedor (predeterminado)" },
 };
 
+/**
+ * Attributi di cui ci serve il valore localizzato, e come si chiama la lista
+ * nel foglio "Dropdown Lists" del template.
+ */
+export const VOCAB_ATTRS = {
+  action:    /^::record_action$/,
+  extIdType: /^externally_assigned_product_identifier#1\.type$/,
+  condition: /^condition_type#1\.value$/,
+  channel:   /^fulfillment_availability#1\.fulfillment_channel_code$/,
+};
+
+/**
+ * Ricava il vocabolario dalle liste del template.
+ *
+ * La tabella VOCAB qui sotto e' hardcodata per lingua, e le stringhe non
+ * italiane non sono verificate contro un template reale: se una sola non
+ * combacia, Amazon rifiuta tutte le righe. Il template invece porta i valori
+ * validi nel foglio "Dropdown Lists" (riga 3 = nome tecnico, righe 4+ = valori
+ * nella lingua del file), quindi la fonte giusta e' quella. La tabella resta
+ * solo come ultima spiaggia per i template salvati prima di questa modifica.
+ *
+ * Nelle liste di Amazon il primo valore e' quello "normale": per ::record_action
+ * e' la creazione/aggiornamento, per condition_type e' il nuovo, per il canale
+ * e' la gestione da parte del venditore. L'EAN si riconosce dal codice, che non
+ * e' tradotto.
+ */
+export function vocabFromLists(lists) {
+  if (!lists) return null;
+  const a = lists.action, c = lists.condition, ch = lists.channel, e = lists.extIdType;
+  if (!a?.length || !c?.length || !ch?.length || !e?.length) return null;
+  const ean = e.find(v => /^ean$/i.test(String(v).trim()));
+  if (!ean) return null;                       // senza EAN non possiamo identificare il prodotto
+  if (a.length < 2) return null;               // servono creazione e cancellazione
+  return {
+    create: a[0], delete: a[a.length - 1],
+    ean, conditionNew: c[0], channelMerchant: ch[0],
+    origine: "template",
+  };
+}
+
 export function vocabFor(template) {
+  const dal = vocabFromLists(template?.vocabLists);
+  if (dal) return dal;
   const lang = template?.contentLanguageTag || "it_IT";
-  return VOCAB[lang] || VOCAB.it_IT;
+  const fallback = VOCAB[lang] || VOCAB.it_IT;
+  return { ...fallback, origine: VOCAB[lang] ? "tabella:" + lang : "tabella:it_IT (lingua non riconosciuta)" };
+}
+
+/**
+ * Estrae le liste dal foglio "Dropdown Lists" di un workbook SheetJS.
+ * Vive qui perche' la usano sia il browser sia lo script che rigenera il seed.
+ */
+export function extractVocabLists(workbook, XLSX) {
+  const name = workbook.SheetNames.find(n => n === "Dropdown Lists")
+            || workbook.SheetNames.find(n => /dropdown|tendina|listas|listes/i.test(n));
+  if (!name) return null;
+  const sh = workbook.Sheets[name];
+  if (!sh || !sh["!ref"]) return null;
+  const rng = XLSX.utils.decode_range(sh["!ref"]);
+  const at = (r, c) => { const k = XLSX.utils.encode_cell({ r, c }); return sh[k] ? String(sh[k].v).trim() : ""; };
+  const out = {};
+  for (let c = 0; c <= rng.e.c; c++) {
+    const attr = at(2, c);                     // riga 3: nome tecnico dell'attributo
+    if (!attr) continue;
+    for (const [field, re] of Object.entries(VOCAB_ATTRS)) {
+      if (out[field] || !re.test(attr)) continue;
+      const vals = [];
+      for (let r = 3; r <= rng.e.r; r++) { const v = at(r, c); if (v === "") break; vals.push(v); }
+      if (vals.length) out[field] = vals;
+    }
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -100,6 +169,7 @@ export function templateInfo(t) {
     isSeed: !!t.isSeed,
     resolved: Object.keys(cols),
     missing,
+    vocab: vocabFor(t),
   };
 }
 
