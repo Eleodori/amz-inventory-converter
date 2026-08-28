@@ -317,6 +317,76 @@ if (fs.existsSync(REF)) {
   console.log("  – file di riferimento non disponibile, salto");
 }
 
+console.log("\n── audit dai risultati della ricerca prodotti ──");
+{
+  // ListingLoader precompilato sintetico, nella forma che restituisce Seller
+  // Central: 3 colonne di riferimento davanti, riga 5 gli attributi, riga 6
+  // l'esempio, riga 7+ i risultati.
+  const ATTRS = ["::your_search_term", "::recommended_action", "::amazon_title", "::record_action",
+                 "contribution_sku#1.value", "merchant_suggested_asin#1.value"];
+  const RIGHE = [
+    ["BXXXXXXXXX", "Pronto per l'offerta", "Maglione da uomo", "Aggiungi prodotto", "ABC123", "B007KQBXN0"], // esempio
+    [E1,             "Pronto per l'offerta", "Dunlop SPORT 4D XL 225/55/R18 102 H",       "Aggiungi prodotto", "x", "B00DMCD2NU"], // coerente
+    [E2,             "Pronto per l'offerta", "Bridgestone Turanza 6 235/60 R17 102V",     "Aggiungi prodotto", "x", "B0BRSWN92Z"], // misura sbagliata
+    ["B0G2MZ7SRH",   "Pronto per l'offerta", "ATLAS 195/70 R14 91T",                      "Aggiungi prodotto", "x", "B0G2MZ7SRH"], // cercato per ASIN
+    [E3,             "Non disponibile",       "",                                          "Ignorato",          "x", ""],           // nessun ASIN
+  ];
+  const ws = {};
+  const set = (r, c, v) => { if (v !== "" && v != null) ws[XLSX.utils.encode_cell({ r, c })] = { t: "s", v: String(v) } };
+  set(0, 0, "settings=labelRow=4&attributeRow=5&dataRow=7&contentLanguageTag=it_IT");
+  ATTRS.forEach((a, c) => set(4, c, a));
+  RIGHE.forEach((row, i) => row.forEach((v, c) => set(5 + i, c, v)));
+  ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 4 + RIGHE.length, c: ATTRS.length - 1 } });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modello");
+  fs.mkdirSync("/tmp/audit-test", { recursive: true });
+  XLSX.writeFile(wb, "/tmp/audit-test/prefilled.xlsx");
+
+  // listino Deldo minimo, con le colonne che l'audit usa
+  const csv = ["Article;Brand;Width;Height;Speed;Rim;Loadindex;Pattern;Stock;Price;EAN",
+    `A1;DUNLOP;225;55;R;18;102H;SPORT 4D;10;100.00;${E1}`,
+    `A2;BRIDGESTONE;215;65;R;17;99V;Turanza 6;10;120.00;${E2}`,
+    `A3;MICHELIN;205;55;R;16;91V;Primacy 4;10;90.00;${E3}`].join("\n");
+  fs.writeFileSync("/tmp/audit-test/deldo.csv", csv);
+
+  // mappa esistente da preservare
+  fs.writeFileSync("/tmp/audit-test/mappa.csv",
+    'ean,asin,marca,misura,titolo_amazon\n"9999999999994","B0OLDOLD01","PIRELLI","205/55/16","vecchia coppia"\n');
+
+  const { execFileSync } = await import("node:child_process");
+  let out = "";
+  try {
+    out = execFileSync(process.execPath,
+      ["audit_asin.mjs", "/tmp/audit-test/prefilled.xlsx", "/tmp/audit-test/deldo.csv", "/tmp/audit-test/mappa.csv"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) { out = (e.stdout || "") + (e.stderr || "") }
+
+  t("riconosce la sorgente e conta le coppie da verificare", () => {
+    assert.match(out, /ricerca prodotti di Seller Central/);
+    assert.match(out, /coppie EAN→ASIN da verificare\s*:\s*2/);
+    assert.match(out, /cercate per ASIN, non per EAN \(non mappabili\): 1/);
+    assert.match(out, /senza ASIN restituito da Amazon: 1/);
+  });
+  t("la coppia coerente entra in mappa, quella con la misura sbagliata no", () => {
+    const m = fs.readFileSync("report/mappa_ean_asin_verificata.csv", "utf8");
+    assert.ok(m.includes("B00DMCD2NU"), "la coppia coerente manca");
+    assert.ok(!m.includes("B0BRSWN92Z"), "la coppia con la misura sbagliata e' entrata");
+  });
+  t("la mappa esistente non viene persa", () => {
+    const m = fs.readFileSync("report/mappa_ean_asin_verificata.csv", "utf8");
+    assert.ok(m.includes("B0OLDOLD01"), "le coppie preesistenti sono state buttate");
+    assert.match(out, /1 esistenti \+ 1 verificate adesso/);
+  });
+  t("il file di testo tab-delimited resta la sorgente di default", () => {
+    // nessun .xlsx nel nome → percorso report offerte attive
+    let err = "";
+    try {
+      execFileSync(process.execPath, ["audit_asin.mjs", "/tmp/audit-test/deldo.csv", "/tmp/audit-test/deldo.csv"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) { err = (e.stdout || "") + (e.stderr || "") }
+    assert.ok(!/ricerca prodotti/.test(err), "ha usato il parser sbagliato");
+  });
+}
+
 console.log("\n── vocabolario preso dal template, non indovinato ──");
 t("dal template IT esce esattamente il vocabolario italiano", () => {
   const v = vocabFor(seedTemplate());

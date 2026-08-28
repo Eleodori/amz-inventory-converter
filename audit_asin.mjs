@@ -11,11 +11,32 @@
  * TUTTE le misure plausibili presenti nel titolo e verifichiamo se quella di Deldo
  * e' fra loro. Riduce quasi a zero i falsi allarmi.
  *
- * node audit_asin.mjs <report-offerte-attive.txt> <listino-deldo.csv>
+ * Due sorgenti possibili per il primo argomento:
+ *
+ *   node audit_asin.mjs <report-offerte-attive.txt> <listino-deldo.csv>
+ *       verifica le offerte GIA' attive su Amazon.
+ *
+ *   node audit_asin.mjs <ListingLoader-precompilato.xlsm> <listino-deldo.csv> [mappa-esistente.csv]
+ *       verifica i risultati della RICERCA PRODOTTI di Seller Central. Il file
+ *       precompilato che Amazon restituisce dopo una ricerca per EAN contiene
+ *       ::your_search_term (l'EAN cercato), merchant_suggested_asin#1.value
+ *       (l'ASIN) e ::amazon_title (il titolo): esattamente cio' che serve per
+ *       mappare gli EAN che non hanno ancora un ASIN, senza farlo a mano.
+ *       Il terzo argomento, se presente, e' la mappa verificata esistente: le
+ *       coppie nuove ci vengono unite invece di sostituirla.
+ *
+ * Amazon stessa, nelle istruzioni di quel file, scrive: "Ti consigliamo di
+ * verificare i dettagli precompilati per assicurarti che la tua offerta appaia
+ * sul prodotto giusto nel nostro negozio." Questo script e' quella verifica.
  */
 import fs from "node:fs";
 
-const [, , OFF_PATH, DELDO_PATH] = process.argv;
+const [, , OFF_PATH, DELDO_PATH, MAP_PATH] = process.argv;
+
+if (!OFF_PATH || !DELDO_PATH) {
+  console.error("Uso: node audit_asin.mjs <offerte-attive.txt | ListingLoader-precompilato.xlsm> <listino-deldo.csv> [mappa-esistente.csv]");
+  process.exit(1);
+}
 
 function readDelimited(path, delimiter) {
   let text = fs.readFileSync(path, "utf8");
@@ -85,7 +106,86 @@ const deldoLoad = d => {
 };
 
 // ─── Caricamento ──────────────────────────────────────────────────────────────
-const offers = readDelimited(OFF_PATH, "\t");
+
+/** true se la stringa e' un EAN/GTIN plausibile (solo cifre, lunghezza nota). */
+const isEan = v => /^\d+$/.test(String(v || "")) && [8, 12, 13, 14].includes(String(v).length);
+
+/**
+ * Legge il ListingLoader precompilato dalla ricerca prodotti di Seller Central
+ * e lo riporta alla stessa forma del report offerte attive, cosi' la
+ * classificazione qui sotto non cambia di una riga.
+ *
+ * Le righe cercate per ASIN invece che per EAN non sono mappabili (non sappiamo
+ * a quale EAN corrispondono) e vengono contate a parte, non scartate in silenzio.
+ */
+let searchedByAsin = 0, searchNoAsin = 0;
+async function loadSearchResults(path) {
+  const XLSX = (await import("xlsx")).default;
+  const wb = XLSX.read(fs.readFileSync(path), { type: "buffer" });
+  // Cerchiamo la riga che contiene ::your_search_term E l'ASIN suggerito: il
+  // foglio "Definizioni dati" nomina ::your_search_term in una colonna di
+  // descrizioni e da solo trarrebbe in inganno.
+  let sheet = null, attrRow = -1;
+  for (const n of wb.SheetNames) {
+    const sh = wb.Sheets[n];
+    if (!sh || !sh["!ref"]) continue;
+    const rng = XLSX.utils.decode_range(sh["!ref"]);
+    for (let r = 0; r <= Math.min(rng.e.r, 8); r++) {
+      let hasSearch = false, hasAsin = false;
+      for (let c = 0; c <= rng.e.c; c++) {
+        const k = XLSX.utils.encode_cell({ r, c });
+        const v = sh[k] ? String(sh[k].v).trim() : "";
+        if (v === "::your_search_term") hasSearch = true;
+        else if (v === "merchant_suggested_asin#1.value") hasAsin = true;
+      }
+      if (hasSearch && hasAsin) { sheet = n; attrRow = r; break; }
+    }
+    if (sheet) break;
+  }
+  if (!sheet) {
+    console.error(`In ${path} non trovo la colonna "::your_search_term": non e' un ListingLoader precompilato da una ricerca prodotti.`);
+    process.exit(1);
+  }
+  const sh = wb.Sheets[sheet], rng = XLSX.utils.decode_range(sh["!ref"]);
+  const at = (r, c) => { const k = XLSX.utils.encode_cell({ r, c }); return sh[k] ? String(sh[k].v).trim() : ""; };
+  const attrs = []; for (let c = 0; c <= rng.e.c; c++) attrs.push(at(attrRow, c));
+  const col = name => attrs.indexOf(name);
+  const iSearch = col("::your_search_term"), iAsin = col("merchant_suggested_asin#1.value"), iTitle = col("::amazon_title");
+  if (iAsin < 0 || iTitle < 0) {
+    console.error("Nel file mancano merchant_suggested_asin#1.value o ::amazon_title.");
+    process.exit(1);
+  }
+  // La riga di esempio (quella con "BXXXXXXXXX" / "ABC123") non e' un risultato:
+  // si parte da dataRow dichiarato in A1, o dalla riga dopo l'esempio.
+  let a1 = "";
+  for (const c of ["A1", "B1", "C1"]) { const k = sh[c]; if (k) a1 += String(k.v); }
+  const mDataRow = a1.match(/dataRow=(\d+)/);
+  const firstData = mDataRow ? parseInt(mDataRow[1], 10) - 1 : attrRow + 2;
+
+  const out = [];
+  for (let r = firstData; r <= rng.e.r; r++) {
+    const term = at(r, iSearch), asin = at(r, iAsin), title = at(r, iTitle);
+    if (!term && !asin) continue;
+    if (!/^[A-Z0-9]{10}$/.test(asin)) { if (term) searchNoAsin++; continue; }
+    if (!isEan(term)) { searchedByAsin++; continue; }   // riga di esempio o ricerca per ASIN
+    out.push({ "seller-sku": term, asin1: asin, "item-name": title, price: "" });
+  }
+  return out;
+}
+
+const fromSearch = /\.xlsm?$|\.xlsx$/i.test(OFF_PATH);
+const offers = fromSearch ? await loadSearchResults(OFF_PATH) : readDelimited(OFF_PATH, "\t");
+if (fromSearch) {
+  console.log(`Sorgente: risultati della ricerca prodotti di Seller Central (${OFF_PATH})`);
+  console.log(`  coppie EAN→ASIN da verificare : ${offers.length}`);
+  if (searchedByAsin) console.log(`  righe cercate per ASIN, non per EAN (non mappabili): ${searchedByAsin}`);
+  if (searchNoAsin) console.log(`  righe senza ASIN restituito da Amazon: ${searchNoAsin}`);
+  if (offers.length === 0) {
+    console.log("\nNessuna coppia EAN→ASIN da verificare.");
+    if (searchedByAsin) console.log("Questo file viene da una ricerca fatta per ASIN: per mappare gli EAN la ricerca va rifatta incollando gli EAN.");
+    process.exit(0);
+  }
+}
 const deldoRows = readDelimited(DELDO_PATH, ";");
 const deldo = new Map();
 for (const r of deldoRows) if (r.EAN) deldo.set(r.EAN, r);
@@ -159,7 +259,7 @@ for (const o of offers) {
 const collisions = [...byAsin.entries()].filter(([, s]) => s.length > 1);
 
 // ─── Report ───────────────────────────────────────────────────────────────────
-const pct = n => (n / offers.length * 100).toFixed(1) + "%";
+const pct = n => offers.length ? (n / offers.length * 100).toFixed(1) + "%" : "—";
 const line = (lbl, n, note = "") => console.log(`  ${lbl.padEnd(34)}${String(n).padStart(5)}  ${pct(n).padStart(6)}  ${note}`);
 console.log(`offerte attive: ${offers.length} · listino Deldo: ${deldo.size} EAN\n`);
 console.log("╔═══ ESITO ═══╗");
@@ -225,10 +325,39 @@ console.log(`  blacklist_asin_sbagliati.txt ${new Set([...wrong, ...G.loadWrong]
 
 // Mappa verificata: 1 EAN → 1 ASIN, marca e misura confermate dal titolo.
 // E' la base per pinnare l'ASIN nel file quotidiano invece di lasciare indovinare Amazon.
+// La mappa verificata. Se e' stata passata una mappa esistente le coppie nuove
+// ci vengono UNITE: verificando i risultati di una ricerca su 600 EAN non si
+// devono perdere le 4.800 coppie gia' buone.
+const nuove = new Map();
+for (const r of [...G.ok, ...(G.brandOmitted || [])]) nuove.set(r.sku, [r.sku, r.asin, r.brand, r.dKey, r.title]);
+
+let esistenti = new Map(), conflitti = [];
+if (MAP_PATH) {
+  if (!fs.existsSync(MAP_PATH)) { console.error(`Mappa esistente non trovata: ${MAP_PATH}`); process.exit(1); }
+  const righe = fs.readFileSync(MAP_PATH, "utf8").split(/\r?\n/).slice(1).filter(l => l.trim());
+  for (const l of righe) {
+    const campi = l.split(/","/).map(x => x.replace(/^"|"$/g, ""));
+    if (campi.length >= 2 && campi[0]) esistenti.set(campi[0], campi);
+  }
+  for (const [ean, r] of nuove) {
+    const vecchia = esistenti.get(ean);
+    if (vecchia && vecchia[1] !== r[1]) conflitti.push({ ean, prima: vecchia[1], adesso: r[1] });
+  }
+}
+const unita = new Map([...esistenti, ...nuove]);   // le nuove vincono sui doppioni
+
 fs.writeFileSync("report/mappa_ean_asin_verificata.csv",
   "ean,asin,marca,misura,titolo_amazon\n" +
-  [...G.ok, ...(G.brandOmitted || [])].map(r => [r.sku, r.asin, r.brand, r.dKey, r.title].map(esc).join(",")).join("\n") + "\n");
-console.log(`  mappa_ean_asin_verificata.csv ${G.ok.length + (G.brandOmitted || []).length} coppie verificate`);
+  [...unita.values()].map(c => c.map(esc).join(",")).join("\n") + "\n");
+console.log(`  mappa_ean_asin_verificata.csv ${unita.size} coppie` +
+  (MAP_PATH ? `  (${esistenti.size} esistenti + ${nuove.size} verificate adesso, ${nuove.size - [...nuove.keys()].filter(k => !esistenti.has(k)).length} gia' presenti)` : ` verificate`));
+if (conflitti.length) {
+  console.log(`\n  ⚠️  ${conflitti.length} EAN cambiano ASIN rispetto alla mappa esistente — controllali a mano:`);
+  for (const c of conflitti.slice(0, 15)) console.log(`      ${c.ean}  ${c.prima} → ${c.adesso}`);
+  if (conflitti.length > 15) console.log(`      … e altri ${conflitti.length - 15}`);
+  fs.writeFileSync("report/asin_cambiati.csv",
+    "ean,asin_prima,asin_adesso\n" + conflitti.map(c => [c.ean, c.prima, c.adesso].map(esc).join(",")).join("\n") + "\n");
+}
 
 console.log("\n╔═══ I DUE EAN DEGLI ORDINI ═══╗");
 for (const sku of ["3286342052717", "8808563590424"]) {

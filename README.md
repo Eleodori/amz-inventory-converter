@@ -205,6 +205,34 @@ node audit_asin.mjs report_offerte_attive.txt listino_deldo.csv
 # produce report/mappa_ean_asin_verificata.csv → si carica nel tab 🔗 ASIN
 ```
 
+### Mappare gli EAN che non hanno ancora un ASIN, senza farlo a mano
+
+Seller Central ha una **ricerca prodotti in blocco**: incolli un elenco di EAN e
+scarichi un *Modello di caricamento delle offerte precompilato*. Quel file contiene
+tre colonne di riferimento in più rispetto al template normale:
+
+| colonna | contenuto |
+|---|---|
+| `::your_search_term` | l'EAN che hai cercato |
+| `::recommended_action` | es. "Pronto per l'offerta" |
+| `::amazon_title` | il titolo della pagina Amazon |
+
+più `merchant_suggested_asin#1.value` già compilato: è la mappa EAN→ASIN scritta da
+Amazon. Le istruzioni dentro quel file dicono *"Ti consigliamo di verificare i
+dettagli precompilati per assicurarti che la tua offerta appaia sul prodotto giusto"* —
+ed è esattamente ciò che fa l'audit, confrontando marca e misura del titolo con
+quelle del listino fornitore:
+
+```bash
+node audit_asin.mjs ListingLoader_precompilato.xlsm listino_deldo.csv report/mappa_ean_asin_verificata.csv
+```
+
+Il terzo argomento è la mappa esistente: le coppie nuove ci vengono **unite**, non
+la sostituiscono. Gli EAN che cambiano ASIN rispetto a prima finiscono in
+`report/asin_cambiati.csv` da controllare a mano. Le righe cercate per ASIN invece
+che per EAN, e quelle per cui Amazon non restituisce un ASIN, vengono contate a
+parte e non entrano in mappa.
+
 Nel tab ASIN c'è anche l'opzione **"pubblica solo gli EAN con ASIN verificato"**: il modo
 più sicuro, quello che non è verificato non va in vendita.
 
