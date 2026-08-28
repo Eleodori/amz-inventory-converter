@@ -292,6 +292,7 @@ t("range copre tutte le colonne", () => {
 
 console.log("\n── confronto col file compilato a mano da Michele ──");
 const REF = process.env.AMZ_TEMPLATE_REF || "fixtures/template_amazon_riferimento.xlsm";
+const REF_DE = process.env.AMZ_TEMPLATE_REF_DE || "fixtures/template_amazon_de_riferimento.xlsm";
 if (fs.existsSync(REF)) {
   const ref = XLSX.read(fs.readFileSync(REF), { type: "buffer", sheetRows: 8 });
   const rs = ref.Sheets["Modello"];
@@ -336,26 +337,78 @@ t("le liste si estraggono dal foglio Dropdown Lists del file reale", () => {
   assert.equal(l.channel[0], "Gestito dal venditore (default)");
   assert.ok(l.extIdType.includes("EAN"));
 });
-t("un template tedesco NON ha bisogno di stringhe scritte da noi", () => {
-  // Liste come le porterebbe un template DE. I valori esatti non li conosciamo:
-  // il punto e' che il tool li prende dal file, qualunque siano.
-  const de = {
-    contentLanguageTag: "de_DE",
-    vocabLists: {
-      action:    ["QUALUNQUE_COSA_SCRIVA_AMAZON", "UND_DAS_ANDERE"],
-      condition: ["Neu", "Neu - geöffnete Verpackung", "Gebraucht - Wie neu"],
-      channel:   ["Vom Verkäufer versandt", "Versand durch Amazon (EU)"],
-      extIdType: ["EAN", "GTIN", "UPC"],
-    },
-  };
-  const v = vocabFor(de);
-  assert.equal(v.create, "QUALUNQUE_COSA_SCRIVA_AMAZON");
-  assert.equal(v.delete, "UND_DAS_ANDERE");
-  assert.equal(v.conditionNew, "Neu");
-  assert.equal(v.channelMerchant, "Vom Verkäufer versandt");
-  assert.equal(v.ean, "EAN");
+t("template DE reale: il vocabolario esce giusto dal file", () => {
+  if (!fs.existsSync(REF_DE)) { console.log("      (template DE assente, salto)"); return }
+  const wb = XLSX.read(fs.readFileSync(REF_DE), { type: "buffer" });
+  const l = extractVocabLists(wb, XLSX);
+  assert.ok(l, "nessuna lista estratta dal template DE");
+  const sh = wb.Sheets["Vorlage"];
+  const rng = XLSX.utils.decode_range(sh["!ref"]);
+  const at = (r, c) => { const k = XLSX.utils.encode_cell({ r, c }); return sh[k] ? String(sh[k].v).trim() : "" };
+  const attrs = []; for (let c = 0; c <= rng.e.c; c++) attrs.push(at(4, c));
+  const esempi = []; for (let c = 0; c <= rng.e.c; c++) esempi.push(at(5, c));
+  const t2 = { nCols: attrs.length, labelRow: 4, attributeRow: 5, dataRow: 7, sheetName: "Vorlage",
+               marketplaceId: "A1PA6795UKMFR9", contentLanguageTag: "de_DE", vocabLists: l,
+               headerRows: [[], [], [], [], attrs, esempi] };
+  const v = vocabFor(t2);
   assert.equal(v.origine, "template");
+  assert.equal(v.create, "Erstellen oder Bearbeiten");
+  assert.equal(v.delete, "Löschen");
+  assert.equal(v.conditionNew, "Neu");
+  assert.equal(v.ean, "EAN");
+  assert.equal(v.channelMerchant, "Versand durch Händler (Standard)");
+  // e le colonne si risolvono senza toccare i pattern
+  const { missing, cols } = resolveColumns(t2);
+  assert.deepEqual(missing, [], "colonne obbligatorie mancanti sul template DE");
+  assert.match(attrs[cols.price], /marketplace_id=A1PA6795UKMFR9/);
 });
+t("LA TRAPPOLA: la lista del canale su DE e' rovesciata rispetto a IT", () => {
+  // IT: ["Gestito dal venditore (default)", "Logistica di Amazon (UE)"]
+  // DE: ["Versand durch Amazon (EU)", "Versand durch Händler (Standard)"]
+  // Prendere il primo elemento darebbe Logistica di Amazon su tutte le offerte,
+  // con zero merce nei magazzini Amazon.
+  const de = vocabFromLists({
+    action: ["Erstellen oder Bearbeiten", "Löschen"],
+    condition: ["Neu", "Gebraucht"],
+    channel: ["Versand durch Amazon (EU)", "Versand durch Händler (Standard)"],
+    extIdType: ["EAN", "GTIN"],
+  });
+  assert.equal(de.channelMerchant, "Versand durch Händler (Standard)");
+  assert.ok(!/amazon/i.test(de.channelMerchant));
+  const it = vocabFromLists({
+    action: ["Crea o modifica", "Elimina"],
+    condition: ["Nuovo"],
+    channel: ["Gestito dal venditore (default)", "Logistica di Amazon (UE)"],
+    extIdType: ["EAN"],
+  });
+  assert.equal(it.channelMerchant, "Gestito dal venditore (default)");
+});
+t("canale ambiguo: si rifiuta di indovinare", () => {
+  const base = { action: ["a","b"], condition: ["c"], extIdType: ["EAN"] };
+  assert.equal(vocabFromLists({ ...base, channel: ["Amazon EU", "Amazon Prime"] }), null, "due opzioni Amazon: doveva fermarsi");
+  assert.equal(vocabFromLists({ ...base, channel: ["Venditore", "Händler"] }), null, "nessuna opzione Amazon: doveva fermarsi");
+});
+t("la riga di esempio disambigua la creazione", () => {
+  const l = { action: ["Löschen", "Erstellen oder Bearbeiten"],   // ordine invertito
+              condition: ["Gebraucht", "Neu"], channel: ["Händler", "Amazon"], extIdType: ["EAN"] };
+  const v = vocabFromLists(l, { action: "(Standard) Erstellen oder Bearbeiten", condition: "Neu" });
+  assert.equal(v.create, "Erstellen oder Bearbeiten", "non ha usato la riga di esempio");
+  assert.equal(v.delete, "Löschen");
+  assert.equal(v.conditionNew, "Neu");
+});
+t("il convertitore si ferma se il canale nomina Amazon", () => {
+  const tpl = seedTemplate();
+  const rotto = { ...tpl, vocabLists: undefined, contentLanguageTag: "xx_XX" };
+  // forziamo un vocabolario sbagliato passando per il fallback e sovrascrivendo
+  const cols = resolveColumns(tpl).cols;
+  let errore = null;
+  try {
+    expandRows([{ sku: "1", ean: "1", qty: 1, price: 10 }], tpl,
+      { vocab: { create: "X", delete: "Y", ean: "EAN", conditionNew: "Nuovo", channelMerchant: "Logistica di Amazon (UE)" } });
+  } catch (e) { errore = e.message }
+  assert.ok(errore && /nomina Amazon/.test(errore), "non si e' fermato: " + errore);
+});
+
 t("liste incomplete: si ripiega sulla tabella e lo dichiara", () => {
   assert.equal(vocabFromLists(null), null);
   assert.equal(vocabFromLists({ action: ["solo uno"], condition: ["x"], channel: ["y"], extIdType: ["EAN"] }), null,

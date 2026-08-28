@@ -44,7 +44,14 @@ export const REQUIRED_FIELDS = ["sku", "action", "extIdType", "extId", "conditio
 const VOCAB = {
   it_IT: { create: "Crea o modifica", delete: "Elimina", ean: "EAN", conditionNew: "Nuovo", channelMerchant: "Gestito dal venditore (default)" },
   en_GB: { create: "Create or update", delete: "Delete", ean: "EAN", conditionNew: "New", channelMerchant: "Merchant Fulfilled (default)" },
-  de_DE: { create: "Erstellen oder aktualisieren", delete: "Löschen", ean: "EAN", conditionNew: "Neu", channelMerchant: "Vom Verkäufer versandt (Standard)" },
+  // VERIFICATO sul template DE scaricato da Seller Central il 27/08/2026.
+  // Le due stringhe che avevo scritto a memoria erano sbagliate: "Erstellen oder
+  // aktualisieren" (vero: "Erstellen oder Bearbeiten") e "Vom Verkäufer versandt
+  // (Standard)" (vero: "Versand durch Händler (Standard)").
+  de_DE: { create: "Erstellen oder Bearbeiten", delete: "Löschen", ean: "EAN", conditionNew: "Neu", channelMerchant: "Versand durch Händler (Standard)" },
+  // NON VERIFICATE: nessun template FR/ES mai aperto. Restano solo perche' meglio
+  // di niente se un template arriva senza le liste, ma il tab Template lo dichiara
+  // in arancione e vanno sostituite alla prima occasione.
   fr_FR: { create: "Créer ou mettre à jour", delete: "Supprimer", ean: "EAN", conditionNew: "Neuf", channelMerchant: "Expédié par le vendeur (par défaut)" },
   es_ES: { create: "Crear o actualizar", delete: "Eliminar", ean: "EAN", conditionNew: "Nuevo", channelMerchant: "Gestionado por el vendedor (predeterminado)" },
 };
@@ -75,22 +82,60 @@ export const VOCAB_ATTRS = {
  * e' la gestione da parte del venditore. L'EAN si riconosce dal codice, che non
  * e' tradotto.
  */
-export function vocabFromLists(lists) {
+export function vocabFromLists(lists, esempi = {}) {
   if (!lists) return null;
-  const a = lists.action, c = lists.condition, ch = lists.channel, e = lists.extIdType;
-  if (!a?.length || !c?.length || !ch?.length || !e?.length) return null;
-  const ean = e.find(v => /^ean$/i.test(String(v).trim()));
-  if (!ean) return null;                       // senza EAN non possiamo identificare il prodotto
-  if (a.length < 2) return null;               // servono creazione e cancellazione
-  return {
-    create: a[0], delete: a[a.length - 1],
-    ean, conditionNew: c[0], channelMerchant: ch[0],
-    origine: "template",
-  };
+  const { action, condition, channel, extIdType } = lists;
+  if (!action?.length || !condition?.length || !channel?.length || !extIdType?.length) return null;
+
+  // EAN: e' un codice, non una parola tradotta.
+  const ean = extIdType.find(v => /^ean$/i.test(String(v).trim()));
+  if (!ean) return null;
+
+  // Creazione: la riga di esempio del template contiene il valore giusto con un
+  // prefisso ("(Impostazione predefinita) Crea o modifica", "(Standard) Erstellen
+  // oder Bearbeiten"). Se l'esempio non aiuta si ripiega sul primo della lista.
+  if (action.length < 2) return null;
+  const dentro = (lista, campione) => campione
+    ? lista.find(v => v && String(campione).includes(v)) || null
+    : null;
+  const create = dentro(action, esempi.action) || action[0];
+  const del = action.find(v => v !== create);
+  if (!del) return null;
+
+  // Condizione: nell'esempio c'e' il valore esatto ("Nuovo", "Neu").
+  const conditionNew = (esempi.condition && condition.includes(esempi.condition.trim()))
+    ? esempi.condition.trim() : condition[0];
+
+  // Canale: QUI LA POSIZIONE NON VALE. Nel template IT la lista e'
+  //   ["Gestito dal venditore (default)", "Logistica di Amazon (UE)"]
+  // in quello DE e' ROVESCIATA:
+  //   ["Versand durch Amazon (EU)", "Versand durch Händler (Standard)"]
+  // Prendendo il primo elemento su DE si dichiarerebbe ogni offerta come
+  // Logistica di Amazon, con zero merce nei magazzini Amazon. La distinzione
+  // affidabile e' un'altra: l'opzione della logistica Amazon nomina Amazon,
+  // quella del venditore no. In nessuna lingua.
+  const nonAmazon = channel.filter(v => !/amazon/i.test(String(v)));
+  if (nonAmazon.length !== 1) return null;     // ambiguo: meglio fermarsi che indovinare
+  const channelMerchant = nonAmazon[0];
+
+  // Ogni valore derivato deve stare nella sua lista.
+  if (!action.includes(create) || !action.includes(del)) return null;
+  if (!condition.includes(conditionNew)) return null;
+  if (!channel.includes(channelMerchant)) return null;
+
+  return { create, delete: del, ean, conditionNew, channelMerchant, origine: "template" };
+}
+
+/** Valori della riga di esempio (riga 6) utili a disambiguare il vocabolario. */
+export function vocabExamples(template) {
+  const { cols } = resolveColumns(template);
+  const row = template?.headerRows?.[5] || [];
+  const at = f => (cols[f] !== undefined && row[cols[f]] != null) ? String(row[cols[f]]).trim() : null;
+  return { action: at("action"), condition: at("condition") };
 }
 
 export function vocabFor(template) {
-  const dal = vocabFromLists(template?.vocabLists);
+  const dal = vocabFromLists(template?.vocabLists, vocabExamples(template));
   if (dal) return dal;
   const lang = template?.contentLanguageTag || "it_IT";
   const fallback = VOCAB[lang] || VOCAB.it_IT;

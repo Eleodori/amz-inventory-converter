@@ -183,7 +183,10 @@ const FIELD_LABELS={sku:"SKU",action:"Azione",extIdType:"Tipo ID",extId:"EAN",as
 const VOCAB={
   it_IT:{create:"Crea o modifica",ean:"EAN",conditionNew:"Nuovo",channelMerchant:"Gestito dal venditore (default)"},
   en_GB:{create:"Create or update",ean:"EAN",conditionNew:"New",channelMerchant:"Merchant Fulfilled (default)"},
-  de_DE:{create:"Erstellen oder aktualisieren",ean:"EAN",conditionNew:"Neu",channelMerchant:"Vom Verkäufer versandt (Standard)"},
+  // VERIFICATO sul template DE scaricato il 27/08/2026: le due stringhe che avevo
+  // scritto a memoria erano sbagliate ("Erstellen oder aktualisieren" e
+  // "Vom Verkäufer versandt (Standard)").
+  de_DE:{create:"Erstellen oder Bearbeiten",ean:"EAN",conditionNew:"Neu",channelMerchant:"Versand durch Händler (Standard)"},
   fr_FR:{create:"Créer ou mettre à jour",ean:"EAN",conditionNew:"Neuf",channelMerchant:"Expédié par le vendeur (par défaut)"},
   es_ES:{create:"Crear o actualizar",ean:"EAN",conditionNew:"Nuevo",channelMerchant:"Gestionado por el vendedor (predeterminado)"}
 };
@@ -197,16 +200,36 @@ const VOCAB_ATTRS={
 // tecnico, righe 4+ i valori nella lingua del file. La tabella VOCAB e' hardcodata
 // e le stringhe non italiane non sono verificate: se una non combacia Amazon
 // rifiuta tutte le righe. Quindi si usa solo come ultima spiaggia.
-function vocabFromLists(l){
+function vocabFromLists(l,es){
+  es=es||{};
   if(!l)return null;
   const a=l.action,c=l.condition,ch=l.channel,e=l.extIdType;
   if(!(a&&a.length)||!(c&&c.length)||!(ch&&ch.length)||!(e&&e.length))return null;
   const ean=e.find(v=>/^ean$/i.test(String(v).trim()));
   if(!ean||a.length<2)return null;
-  return{create:a[0],delete:a[a.length-1],ean,conditionNew:c[0],channelMerchant:ch[0],origine:"template"};
+  // La riga di esempio contiene il valore di creazione con un prefisso:
+  // "(Impostazione predefinita) Crea o modifica" · "(Standard) Erstellen oder Bearbeiten".
+  const dentro=(lista,camp)=>camp?(lista.find(v=>v&&String(camp).includes(v))||null):null;
+  const create=dentro(a,es.action)||a[0];
+  const del=a.find(v=>v!==create); if(!del)return null;
+  const conditionNew=(es.condition&&c.indexOf(es.condition.trim())>=0)?es.condition.trim():c[0];
+  // Canale: la POSIZIONE NON VALE. Su IT la lista e' [venditore, Amazon]; sul
+  // template DE del 27/08 e' rovesciata: ["Versand durch Amazon (EU)",
+  // "Versand durch Händler (Standard)"]. L'opzione della logistica Amazon nomina
+  // Amazon, quella del venditore no, in nessuna lingua.
+  const nonAmazon=ch.filter(v=>!/amazon/i.test(String(v)));
+  if(nonAmazon.length!==1)return null;
+  const channelMerchant=nonAmazon[0];
+  if(a.indexOf(create)<0||a.indexOf(del)<0||c.indexOf(conditionNew)<0||ch.indexOf(channelMerchant)<0)return null;
+  return{create,delete:del,ean,conditionNew,channelMerchant,origine:"template"};
+}
+function vocabExamples(t){
+  const rc=resolveColumns(t), row=(t&&t.headerRows&&t.headerRows[5])||[];
+  const at=f=>(rc.cols[f]!==undefined&&row[rc.cols[f]]!=null)?String(row[rc.cols[f]]).trim():null;
+  return{action:at("action"),condition:at("condition")};
 }
 function vocabFor(t){
-  const dal=vocabFromLists(t&&t.vocabLists);
+  const dal=vocabFromLists(t&&t.vocabLists,vocabExamples(t));
   if(dal)return dal;
   const lang=t&&t.contentLanguageTag;
   const f=VOCAB[lang]||VOCAB.it_IT;
@@ -246,6 +269,13 @@ function priceColumns(t){const r=resolveColumns(t);return ["price","minPrice","m
 
 // Espande i record compatti in righe larghe nCols. qty 0 = riga di disattivazione.
 function expandRecords(records,t,opts){
+  // Stessa rete di sicurezza del server: su DE la lista del canale e' rovesciata
+  // rispetto a IT, e scrivere l'elemento sbagliato significa Logistica di Amazon
+  // su tutto il catalogo, con zero merce nei magazzini Amazon.
+  {const _v=vocabFor(t);
+   if(/amazon/i.test(String(_v.channelMerchant)))
+     throw new Error('Il canale di spedizione sarebbe "'+_v.channelMerchant+'", che nomina Amazon: significherebbe Logistica di Amazon, non gestito dal venditore. Ricarica il template dal tab Template.');}
+
   opts=opts||{};
   const r=resolveColumns(t);
   if(r.missing.length)throw new Error("Template incompleto: mancano "+r.missing.map(m=>FIELD_LABELS[m]||m).join(", "));
@@ -259,7 +289,8 @@ function expandRecords(records,t,opts){
     // al prodotto giusto invece di lasciare l'abbinamento ad Amazon.
     if(rec.asin&&cols.asin!==undefined){put("asin",rec.asin);}
     else{put("extIdType",voc.ean);put("extId",rec.ean);}
-    put("condition",voc.conditionNew);put("channel",voc.channelMerchant);
+    put("condition",voc.conditionNew);
+    put("channel",voc.channelMerchant);
     put("quantity",Number(rec.qty)||0);
     if(lead!==null&&lead!==undefined&&lead!=="")put("leadtime",Number(lead));
     put("price",round2(rec.price));

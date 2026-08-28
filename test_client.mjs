@@ -98,6 +98,42 @@ t("client e server derivano lo stesso vocabolario", () => {
   assert.equal(a.origine, "template");
   assert.equal(b.origine, "template");
 });
+t("client e server derivano lo stesso vocabolario dal template DE", async () => {
+  const REF_DE = "fixtures/template_amazon_de_riferimento.xlsm";
+  if (!fs.existsSync(REF_DE)) { console.log("      (template DE assente, salto)"); return }
+  const b = fs.readFileSync(REF_DE);
+  const f = { name: "ListingLoader.xlsm", arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
+  const de = await H.parseTemplateFile(f);
+  assert.equal(de.marketplaceId, "A1PA6795UKMFR9");
+  assert.equal(de.contentLanguageTag, "de_DE");
+  assert.equal(de.sheetName, "Vorlage");
+  const a = H.vocabFor(de), b2 = srvVocabFor(de);
+  assert.deepEqual(
+    { c: a.create, d: a.delete, e: a.ean, n: a.conditionNew, ch: a.channelMerchant },
+    { c: b2.create, d: b2.delete, e: b2.ean, n: b2.conditionNew, ch: b2.channelMerchant });
+  assert.equal(a.channelMerchant, "Versand durch Händler (Standard)");
+  assert.ok(!/amazon/i.test(a.channelMerchant), "il client scriverebbe Logistica di Amazon");
+});
+t("client e server producono righe identiche sul template DE", async () => {
+  const REF_DE = "fixtures/template_amazon_de_riferimento.xlsm";
+  if (!fs.existsSync(REF_DE)) return;
+  const b = fs.readFileSync(REF_DE);
+  const f = { name: "ListingLoader.xlsm", arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
+  const de = await H.parseTemplateFile(f);
+  const recs = [{ sku: "3188649821594", ean: "", asin: "B00DMCD2NU", qty: 76, price: 149.1 },
+                { sku: "3286340273619", ean: "3286340273619", qty: 46, price: 205.2 }];
+  const cl = H.expandRecords(recs, de, { marketplace: "DE", leadtime: 4 });
+  const sv = expandRows(recs, de, { marketplace: "DE", leadtime: 4 });
+  assert.deepEqual(cl, sv);
+  const { cols } = H.resolveColumns(de);
+  assert.equal(cl[0][cols.action], "Erstellen oder Bearbeiten");
+  assert.equal(cl[0][cols.condition], "Neu");
+  assert.equal(cl[0][cols.channel], "Versand durch Händler (Standard)");
+  assert.equal(cl[0][cols.asin], "B00DMCD2NU");
+  assert.equal(cl[0][cols.extId], "");
+  assert.equal(cl[1][cols.extIdType], "EAN");
+  assert.equal(typeof cl[0][cols.price], "number");
+});
 t("il client rifiuta un template senza le liste", async () => {
   // stesso file ma senza il foglio Dropdown Lists: deve fallire con un messaggio
   // chiaro invece di ripiegare in silenzio su stringhe scritte a mano.

@@ -153,7 +153,19 @@ export function resolveDuplicate(existing, candidate, mode, supplierPriority) {
 export function expandRows(records, template, opts = {}) {
   const { cols, missing } = resolveColumns(template);
   if (missing.length) throw new Error("Template incompleto, colonne mancanti: " + missing.join(", "));
-  const vocab = vocabFor(template);
+  const vocab = opts.vocab || vocabFor(template);
+  // Rete di sicurezza sul canale di spedizione. Nel template IT la lista e'
+  //   ["Gestito dal venditore (default)", "Logistica di Amazon (UE)"]
+  // in quello DE e' ROVESCIATA:
+  //   ["Versand durch Amazon (EU)", "Versand durch Händler (Standard)"]
+  // Scrivere l'elemento sbagliato dichiara ogni offerta come Logistica di Amazon
+  // con zero merce nei magazzini Amazon: meglio non produrre il file.
+  if (/amazon/i.test(String(vocab.channelMerchant))) {
+    throw new Error(
+      `Il canale di spedizione sarebbe "${vocab.channelMerchant}", che nomina Amazon: ` +
+      `significherebbe Logistica di Amazon, non gestito dal venditore. Ricarica il template dal tab Template.`
+    );
+  }
   const marketplace = opts.marketplace || "IT";
   const leadtime = opts.leadtime;
   const n = template.nCols;
