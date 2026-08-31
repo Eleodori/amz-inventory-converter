@@ -57,13 +57,72 @@ const STORE_KEY="amz-conv-v6";
 const DEFAULT={suppliers:[],marketplaces:[],blacklist:[],
   qtyMode:"catalog",dupMode:"price",minStock:0,maxQty:0,floorMarginPct:0,
   zeroKeepDays:90,maxDeltaPct:20,minProducts:100};
+// L'id serve per controllare che il template caricato sia di quel marketplace:
+// dieci nomi di colonna lo contengono, e un template sbagliato produce un file
+// rifiutato in blocco. IT e DE sono verificati sui template veri; gli altri
+// vengono dalla tabella degli id SP-API. Dove non l'ho verificato metto null:
+// lo si compila da solo al primo caricamento del template.
 const EU_MP=[
-{code:"IT",name:"Amazon.it",cur:"EUR"},{code:"DE",name:"Amazon.de",cur:"EUR"},
-{code:"FR",name:"Amazon.fr",cur:"EUR"},{code:"ES",name:"Amazon.es",cur:"EUR"},
-{code:"NL",name:"Amazon.nl",cur:"EUR"},{code:"BE",name:"Amazon.com.be",cur:"EUR"},
-{code:"PL",name:"Amazon.pl",cur:"PLN"},{code:"SE",name:"Amazon.se",cur:"SEK"},
-{code:"UK",name:"Amazon.co.uk",cur:"GBP"}
+{code:"IT",name:"Amazon.it",cur:"EUR",id:"APJ6JRA9NG5V4"},
+{code:"DE",name:"Amazon.de",cur:"EUR",id:"A1PA6795UKMFR9"},
+{code:"FR",name:"Amazon.fr",cur:"EUR",id:"A13V1IB3VIYZZH"},
+{code:"ES",name:"Amazon.es",cur:"EUR",id:"A1RKKUPIHCS9HS"},
+{code:"NL",name:"Amazon.nl",cur:"EUR",id:"A1805IZSGTT6HS"},
+{code:"SE",name:"Amazon.se",cur:"SEK",id:"A2NODRKZP88ZB9"},
+{code:"BE",name:"Amazon.com.be",cur:"EUR",id:null},
+{code:"PL",name:"Amazon.pl",cur:"PLN",id:null},
+{code:"UK",name:"Amazon.co.uk",cur:"GBP",id:null}
 ];
+const mpInfo=code=>EU_MP.find(m=>m.code===code)||{code,name:code,id:null};
+/** Fasce del fornitore per un marketplace. Stessa regola del server: una lista
+    vuota in tiersByMarket non e' una configurazione, si torna a quelle storiche. */
+function tiersForClient(sup,code){
+  const bm=sup?.tiersByMarket, want=String(code||"").toUpperCase();
+  if(bm&&Array.isArray(bm[want])&&bm[want].length)return bm[want];
+  return sup?.tiers||[];
+}
+const mpCodes=c=>(c?.marketplaces||[]).map(m=>String(m.code).toUpperCase());
+const mpPrimary=c=>mpCodes(c)[0]||"IT";
+/** Impostazioni effettive: override sul marketplace, poi globale, poi default.
+    Stessa precedenza del server (_lib/marketplace.mjs): se le due divergessero,
+    l'interfaccia mostrerebbe numeri che il file non usa. */
+const MK_FALLBACK={leadtime:3,quantity:10,minStock:0,maxQty:0,onlyMapped:false};
+function mkSettings(c,code){
+  const m=(c?.marketplaces||[]).find(x=>String(x.code).toUpperCase()===String(code).toUpperCase())||{};
+  const out={code:String(code).toUpperCase()};
+  for(const f of Object.keys(MK_FALLBACK)) out[f]=m[f]??c?.[f]??MK_FALLBACK[f];
+  const primario=out.code===mpPrimary(c);
+  out.blacklist=Array.isArray(m.blacklist)?m.blacklist:(primario&&Array.isArray(c?.blacklist)?c.blacklist:[]);
+  return out;
+}
+/** Selettore, visibile solo se c'e' piu' di un marketplace: con la sola Italia
+    l'interfaccia resta identica a prima. */
+function MarketPicker({config:c,value,onChange}){
+  const codes=mpCodes(c);
+  if(codes.length<2)return null;
+  return(
+    <Card style={{marginBottom:14,padding:"10px 14px"}}>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <span style={{fontSize:11,color:"var(--text-label)",textTransform:"uppercase",letterSpacing:.5}}>Marketplace</span>
+        {codes.map(code=>{
+          const attivo=code===value;
+          const m=(c.marketplaces||[]).find(x=>String(x.code).toUpperCase()===code);
+          const spento=m&&m.enabled===false;
+          return(
+            <button key={code} onClick={()=>onChange(code)}
+              style={{padding:"6px 14px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+                border:attivo?"1px solid #6366f1":"1px solid var(--ghost-border)",
+                background:attivo?"#6366f1":"transparent",
+                color:attivo?"#fff":(spento?"var(--text-muted)":"var(--ghost-text)"),
+                opacity:spento?.55:1}}>
+              {mpInfo(code).name}{spento?" (spento)":""}
+            </button>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
 
 const DEFAULT_TIERS=[
   {upTo:50,markupPct:18,flatFee:7},
@@ -388,15 +447,24 @@ async function parseTemplateFile(file){
 }
 
 // Scarica dal server il template completo (righe di intestazione incluse).
-let _templateCache=null;
-async function getFullTemplate(force){
-  if(_templateCache&&!force)return _templateCache;
-  const r=await fetch("/api/template?full=1");
+let _templateCache={};   // per marketplace
+/**
+ * Template completo, in cache PER MARKETPLACE.
+ *
+ * Prima la cache era una sola variabile: con due marketplace, scaricato il file
+ * italiano, il successivo download tedesco avrebbe riusato il template italiano
+ * e prodotto un file con l'id marketplace sbagliato in dieci colonne — rifiutato
+ * in blocco da Amazon.de, e senza niente a schermo che lo spiegasse.
+ */
+async function getFullTemplate(code,force){
+  const mk=String(code||"IT").toUpperCase();
+  if(_templateCache[mk]&&!force)return _templateCache[mk];
+  const r=await fetch("/api/template?full=1&mk="+encodeURIComponent(mk));
   if(!r.ok)throw new Error("Template non disponibile (HTTP "+r.status+")");
   const d=await r.json();
-  if(!d.template)throw new Error("Template non configurato");
-  _templateCache=d.template;
-  return _templateCache;
+  if(!d.template)throw new Error(d.error||("Nessun template configurato per "+mk));
+  _templateCache[mk]=d.template;
+  return d.template;
 }
 
 
@@ -638,13 +706,42 @@ function TiersEditor({tiers,onChange}){
 // ─── SuppliersTab ────────────────────────────────────────────────────────────
 function SuppliersTab({config:c,save}){
   const[ed,sEd]=useState(null);
-  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS});
-  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS.map(t=>({...t}))});sEd("new");};
-  const ed2=i=>{const s=c.suppliers[i];sF({...s,stockCol:s.stockCol||"",ftpFolder:s.ftpFolder||"",tiers:s.tiers?s.tiers.map(t=>({...t})):DEFAULT_TIERS.map(t=>({...t}))});sEd(i);};
+  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS,tiersByMarket:{}});
+  // Marketplace di cui si stanno modificando le fasce. Il primario modifica
+  // "tiers"; gli altri modificano tiersByMarket[CODICE] solo se hanno fasce
+  // dedicate, altrimenti ereditano quelle del primario (stessa regola del
+  // server in _lib/marketplace.mjs → tiersFor).
+  const[mkT,setMkT]=useState(null);
+  const codes=mpCodes(c), primario=mpPrimary(c);
+  const codeT=(mkT&&codes.includes(mkT))?mkT:primario;
+  const dedicate=codeT!==primario&&Array.isArray(f.tiersByMarket?.[codeT])&&f.tiersByMarket[codeT].length>0;
+  const tiersInEdit=dedicate?f.tiersByMarket[codeT]:(f.tiers||[]);
+  const setTiersInEdit=tiers=>{
+    if(dedicate)sF({...f,tiersByMarket:{...f.tiersByMarket,[codeT]:tiers}});
+    else sF({...f,tiers});
+  };
+  const creaDedicate=()=>sF({...f,tiersByMarket:{...f.tiersByMarket,[codeT]:(f.tiers||[]).map(t=>({...t}))}});
+  const togliDedicate=()=>{const bm={...f.tiersByMarket};delete bm[codeT];sF({...f,tiersByMarket:bm})};
+  const copiaTiers=t=>(t||[]).map(x=>({...x}));
+  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS.map(t=>({...t})),tiersByMarket:{}});setMkT(primario);sEd("new");};
+  const ed2=i=>{const s=c.suppliers[i];
+    const bm={};
+    for(const[k,v]of Object.entries(s.tiersByMarket||{}))if(Array.isArray(v)&&v.length)bm[String(k).toUpperCase()]=copiaTiers(v);
+    sF({...s,stockCol:s.stockCol||"",ftpFolder:s.ftpFolder||"",tiers:s.tiers?copiaTiers(s.tiers):DEFAULT_TIERS.map(t=>({...t})),tiersByMarket:bm});
+    setMkT(primario);sEd(i);};
+  const norm=tiers=>{
+    const out=tiers.map(t=>({...t,markupPct:parseFloat(t.markupPct)||0,flatFee:parseFloat(t.flatFee)||0,upTo:t.upTo===null?null:parseFloat(t.upTo)||null}));
+    // L'ultima fascia non ha limite: se restasse un numero, i prezzi sopra
+    // quel limite resterebbero senza fascia e uscirebbero senza ricarico.
+    if(out.length>0)out[out.length-1].upTo=null;
+    return out;
+  };
   const sv=()=>{
     if(!f.name||!f.skuCol||!f.eanCol||!f.priceCol)return;
-    const s={...f,tiers:f.tiers.map(t=>({...t,markupPct:parseFloat(t.markupPct)||0,flatFee:parseFloat(t.flatFee)||0,upTo:t.upTo===null?null:parseFloat(t.upTo)||null}))};
-    if(s.tiers.length>0)s.tiers[s.tiers.length-1].upTo=null;
+    const bm={};
+    for(const[k,v]of Object.entries(f.tiersByMarket||{}))if(Array.isArray(v)&&v.length)bm[String(k).toUpperCase()]=norm(v);
+    const s={...f,tiers:norm(f.tiers),tiersByMarket:Object.keys(bm).length?bm:undefined};
+    if(!s.tiersByMarket)delete s.tiersByMarket;
     const l=[...c.suppliers];ed==="new"?l.push(s):(l[ed]=s);save({...c,suppliers:l});sEd(null);
   };
   const rm=i=>save({...c,suppliers:c.suppliers.filter((_,j)=>j!==i)});
@@ -667,7 +764,15 @@ function SuppliersTab({config:c,save}){
                 {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
                 {s.ftpFolder&&<span style={S.badge("var(--badge-neutral)")}>FTP: {s.ftpFolder}</span>}
               </div>
-              <div style={{marginTop:6,fontSize:11,color:"var(--text-muted)"}}>{s.tiers?tiersBadge(s.tiers):`+${s.markupPct}%+${s.flatFee}€`}</div>
+              <div style={{marginTop:6,fontSize:11,color:"var(--text-muted)"}}>
+                {codes.length>1&&<span style={{color:"var(--text-label)"}}>{mpInfo(primario).name}: </span>}
+                {s.tiers?tiersBadge(s.tiers):`+${s.markupPct}%+${s.flatFee}€`}
+              </div>
+              {Object.entries(s.tiersByMarket||{}).filter(([,v])=>Array.isArray(v)&&v.length).map(([code,v])=>(
+                <div key={code} style={{marginTop:3,fontSize:11,color:"var(--text-muted)"}}>
+                  <span style={{color:"var(--text-label)"}}>{mpInfo(String(code).toUpperCase()).name}: </span>{tiersBadge(v)}
+                </div>
+              ))}
             </div>
             <div style={{display:"flex",gap:6,marginLeft:10}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div>
           </div>
@@ -685,7 +790,39 @@ function SuppliersTab({config:c,save}){
             <Inp label="Colonna Stock" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
             <Inp label="Cartella FTP (se diversa dal nome)" value={f.ftpFolder} onChange={e=>sF({...f,ftpFolder:e.target.value})} placeholder={`es. DLD (lascia vuoto se uguale a "${f.name||"nome fornitore"}")`}/>
           </div>
-          <TiersEditor tiers={f.tiers} onChange={tiers=>sF({...f,tiers})}/>
+          {codes.length>1&&(
+            <div style={{background:"var(--bg-stat)",borderRadius:10,padding:"10px 14px",margin:"4px 0 12px"}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <span style={{fontSize:11,color:"var(--text-label)",textTransform:"uppercase",letterSpacing:.5}}>Fasce per</span>
+                {codes.map(code=>{
+                  const att=code===codeT;
+                  const ded=code===primario||(Array.isArray(f.tiersByMarket?.[code])&&f.tiersByMarket[code].length>0);
+                  return(
+                    <button key={code} onClick={()=>setMkT(code)}
+                      style={{padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",
+                        border:att?"1px solid #6366f1":"1px solid var(--ghost-border)",
+                        background:att?"#6366f1":"transparent",
+                        color:att?"#fff":"var(--ghost-text)"}}>
+                      {mpInfo(code).name}{ded?"":" (eredita)"}
+                    </button>
+                  );
+                })}
+              </div>
+              {codeT!==primario&&(
+                <div style={{marginTop:8,fontSize:12,color:"var(--text-muted)",lineHeight:1.6}}>
+                  {dedicate
+                    ? <>Fasce dedicate a {mpInfo(codeT).name}. <Btn v="ghost" onClick={togliDedicate} style={{fontSize:11,padding:"3px 9px",marginLeft:6}}>Torna alle fasce di {mpInfo(primario).name}</Btn></>
+                    : <>{mpInfo(codeT).name} usa le stesse fasce di {mpInfo(primario).name}. <Btn v="ghost" onClick={creaDedicate} style={{fontSize:11,padding:"3px 9px",marginLeft:6}}>Fasce dedicate per {mpInfo(codeT).name}</Btn></>}
+                </div>
+              )}
+            </div>
+          )}
+          <TiersEditor tiers={tiersInEdit} onChange={setTiersInEdit}/>
+          {codes.length>1&&!dedicate&&codeT!==primario&&(
+            <div style={{fontSize:11,color:"#f59e0b",marginTop:-6,marginBottom:10}}>
+              Stai modificando le fasce di {mpInfo(primario).name}: valgono anche per {mpInfo(codeT).name} finché non gliene dai di dedicate.
+            </div>
+          )}
           <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
         </Card>
       )}
@@ -696,40 +833,143 @@ function SuppliersTab({config:c,save}){
 // ─── MarketplacesTab ─────────────────────────────────────────────────────────
 function MarketplacesTab({config:c,save}){
   const[ed,sEd]=useState(null);
-  const[f,sF]=useState({code:"IT",quantity:8,leadtime:4});
-  const nw=()=>{sF({code:"IT",quantity:8,leadtime:4});sEd("new");};
-  const ed2=i=>{sF({...c.marketplaces[i]});sEd(i);};
-  const sv=()=>{const m={...f,quantity:parseInt(f.quantity)||8,leadtime:parseInt(f.leadtime)||4};const l=[...c.marketplaces];ed==="new"?l.push(m):(l[ed]=m);save({...c,marketplaces:l});sEd(null);};
-  const rm=i=>save({...c,marketplaces:c.marketplaces.filter((_,j)=>j!==i)});
-  const info=code=>EU_MP.find(m=>m.code===code)||{name:code};
+  const vuoto={code:"DE",marketplaceId:"",quantity:8,leadtime:4,minStock:"",maxQty:"",enabled:true,onlyMapped:false};
+  const[f,sF]=useState(vuoto);
+  const lista=c.marketplaces||[];
+
+  const nw=()=>{
+    // proponi il primo marketplace europeo non ancora configurato
+    const liberi=EU_MP.filter(m=>!mpCodes(c).includes(m.code));
+    const primo=liberi[0]||EU_MP[1];
+    sF({...vuoto,code:primo.code,marketplaceId:primo.id||""});
+    sEd("new");
+  };
+  const apri=i=>{const m=lista[i];sF({
+    code:m.code,marketplaceId:m.marketplaceId||mpInfo(m.code).id||"",
+    quantity:m.quantity??8,leadtime:m.leadtime??4,
+    minStock:m.minStock??"",maxQty:m.maxQty??"",
+    enabled:m.enabled!==false,onlyMapped:!!m.onlyMapped,
+  });sEd(i);};
+
+  const sv=()=>{
+    const code=String(f.code).toUpperCase();
+    const doppio=lista.some((m,j)=>String(m.code).toUpperCase()===code&&j!==(ed==="new"?-1:ed));
+    if(doppio){alert(`${code} è già configurato: non puoi averlo due volte.`);return}
+    const num=v=>v===""||v===null||v===undefined?undefined:(parseInt(v,10)||0);
+    const m={
+      ...(ed==="new"?{}:lista[ed]),
+      code,
+      marketplaceId:String(f.marketplaceId||"").trim().toUpperCase()||mpInfo(code).id||null,
+      quantity:num(f.quantity)??8, leadtime:num(f.leadtime)??4,
+      minStock:num(f.minStock), maxQty:num(f.maxQty),
+      enabled:!!f.enabled, onlyMapped:!!f.onlyMapped,
+    };
+    // i campi lasciati vuoti non devono finire nella config come undefined:
+    // togliendoli, la risoluzione ricade sul valore globale
+    for(const k of ["minStock","maxQty"]) if(m[k]===undefined) delete m[k];
+    // la blacklist di un marketplace nuovo parte vuota, e deve essere un array
+    // esplicito: "assente" significherebbe "eredita quella storica"
+    if(!Array.isArray(m.blacklist)) m.blacklist=[];
+    const l=[...lista];
+    ed==="new"?l.push(m):(l[ed]=m);
+    save({...c,marketplaces:l});
+    sEd(null);
+  };
+
+  const rm=i=>{
+    if(i===0&&lista.length>1){
+      alert("Non puoi togliere il primo marketplace mentre ce ne sono altri: è quello che eredita i dati storici (template, registro, mappa ASIN). Sposta prima l'ordine, oppure disattivalo con la spunta.");
+      return;
+    }
+    const m=lista[i];
+    if(!confirm(`Togliere ${mpInfo(m.code).name}? La configurazione si perde. Se vuoi solo sospenderlo, togli la spunta "attivo": i dati restano.`))return;
+    save({...c,marketplaces:lista.filter((_,j)=>j!==i)},{shrinkOk:true});
+  };
+
   return(
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace</h3><Btn onClick={nw}>+ Aggiungi</Btn>
+      <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:24}}>🌍</span>
+          <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
+            <div style={{fontWeight:700,marginBottom:4}}>Un catalogo per marketplace</div>
+            Ogni marketplace ha <strong>template, registro delle SKU, mappa ASIN e blacklist separati</strong>. Non è
+            pignoleria: dieci nomi di colonna del template contengono l'id del marketplace, e un registro condiviso
+            farebbe spegnere a vicenda gli EAN presenti su un solo catalogo.
+            <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid var(--info-border)"}}>
+              Il <strong>primo</strong> della lista è il primario: è quello che eredita i dati di quando esisteva un
+              solo marketplace. I campi lasciati vuoti prendono il valore dal tab ⚙️ Regole.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,marginTop:14}}>
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Marketplace <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({lista.length})</span></h3>
+        <Btn onClick={nw}>+ Aggiungi</Btn>
       </div>
-      {c.marketplaces.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
-      {c.marketplaces.map((m,i)=>(
-        <Card key={i}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <strong style={{color:"var(--text)",fontSize:15}}>{info(m.code).name}</strong>
-              <div style={{marginTop:6,display:"flex",gap:6}}>
-                <span style={S.badge("var(--badge-neutral)")}>Qty: {m.quantity}</span>
-                <span style={S.badge("var(--badge-neutral)")}>Lead: {m.leadtime}gg</span>
+
+      {lista.length===0&&ed===null&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun marketplace configurato.</p></Card>}
+
+      {lista.map((m,i)=>{
+        const st=mkSettings(c,m.code);
+        const spento=m.enabled===false;
+        return(
+          <Card key={i} style={spento?{opacity:.6}:undefined}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:240}}>
+                <strong style={{color:"var(--text)",fontSize:15}}>{mpInfo(m.code).name}</strong>
+                {i===0&&<span style={{...S.badge("var(--badge-neutral)"),marginLeft:8}}>primario</span>}
+                {spento&&<span style={{...S.badge("var(--badge-neutral)"),marginLeft:8}}>non attivo</span>}
+                <div style={{marginTop:6,display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <span style={S.badge("var(--badge-neutral)")}>Qty {st.quantity}</span>
+                  <span style={S.badge("var(--badge-neutral)")}>Gestione {st.leadtime}gg</span>
+                  <span style={S.badge("var(--badge-neutral)")}>Stock min {st.minStock}</span>
+                  <span style={S.badge("var(--badge-neutral)")}>Tetto {st.maxQty||"nessuno"}</span>
+                  <span style={S.badge("var(--badge-neutral)")}>Blacklist {st.blacklist.length}</span>
+                  {st.onlyMapped&&<span style={S.badge("var(--badge-neutral)")}>solo ASIN verificati</span>}
+                </div>
+                <div style={{marginTop:6,fontSize:11,color:"var(--text-muted)",fontFamily:"monospace"}}>
+                  {m.marketplaceId||mpInfo(m.code).id||"id marketplace non impostato"}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <Btn v="ghost" onClick={()=>apri(i)}>Modifica</Btn>
+                <Btn v="danger" onClick={()=>rm(i)}>✕</Btn>
               </div>
             </div>
-            <div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>ed2(i)}>Modifica</Btn><Btn v="danger" onClick={()=>rm(i)}>✕</Btn></div>
-          </div>
-        </Card>
-      ))}
+          </Card>
+        );
+      })}
+
       {ed!==null&&(
         <Card accent="#6366f1">
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
-            <Sel label="Marketplace" value={f.code} onChange={e=>sF({...f,code:e.target.value})} options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
+            <Sel label="Marketplace" value={f.code}
+              onChange={e=>{const code=e.target.value;sF({...f,code,marketplaceId:mpInfo(code).id||""})}}
+              options={EU_MP.map(m=>({v:m.code,l:m.name}))}/>
+            <Inp label="Id marketplace" value={f.marketplaceId} placeholder="es. A1PA6795UKMFR9"
+              onChange={e=>sF({...f,marketplaceId:e.target.value})}/>
             <Inp label="Quantità fallback" type="number" value={f.quantity} onChange={e=>sF({...f,quantity:e.target.value})}/>
-            <Inp label="Leadtime (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
+            <Inp label="Tempo di gestione (gg)" type="number" value={f.leadtime} onChange={e=>sF({...f,leadtime:e.target.value})}/>
+            <Inp label="Stock minimo (vuoto = come Regole)" type="number" value={f.minStock} onChange={e=>sF({...f,minStock:e.target.value})}/>
+            <Inp label="Tetto quantità (vuoto = come Regole)" type="number" value={f.maxQty} onChange={e=>sF({...f,maxQty:e.target.value})}/>
           </div>
-          <div style={{display:"flex",gap:8,marginTop:4}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
+          <div style={{display:"flex",gap:18,flexWrap:"wrap",margin:"4px 0 10px"}}>
+            <label style={{display:"flex",gap:8,alignItems:"center",fontSize:13,color:"var(--text)",cursor:"pointer"}}>
+              <input type="checkbox" checked={!!f.enabled} onChange={e=>sF({...f,enabled:e.target.checked})}/>
+              Attivo <span style={{color:"var(--text-muted)",fontSize:11}}>(se spento non genera file, ma non perde nulla)</span>
+            </label>
+            <label style={{display:"flex",gap:8,alignItems:"center",fontSize:13,color:"var(--text)",cursor:"pointer"}}>
+              <input type="checkbox" checked={!!f.onlyMapped} onChange={e=>sF({...f,onlyMapped:e.target.checked})}/>
+              Pubblica solo gli EAN con ASIN verificato
+            </label>
+          </div>
+          <p style={{margin:"0 0 10px",fontSize:11,color:"var(--text-muted)",lineHeight:1.6}}>
+            L'id marketplace si usa per rifiutare un template scaricato dal marketplace sbagliato. Se non lo conosci
+            lascialo vuoto: al primo caricamento del template lo si legge da lì.
+          </p>
+          <div style={{display:"flex",gap:8}}><Btn v="ok" onClick={sv}>Salva</Btn><Btn v="ghost" onClick={()=>sEd(null)}>Annulla</Btn></div>
         </Card>
       )}
     </div>
@@ -737,9 +977,24 @@ function MarketplacesTab({config:c,save}){
 }
 
 // ─── BlacklistTab ────────────────────────────────────────────────────────────
-function BlacklistTab({config:c,save,pronto=true}){
+function BlacklistTab({config:c,save,pronto=true,mk,setMk}){
   const[inp,sInp]=useState("");
   const[esito,sEsito]=useState(null);
+  // La blacklist e' per marketplace: le autorizzazioni marca e i blocchi valgono
+  // su un catalogo alla volta. WESTLAKE bloccata su IT puo' essere vendibile su DE.
+  const code=mk||mpPrimary(c);
+  const idx=(c.marketplaces||[]).findIndex(m=>String(m.code).toUpperCase()===code);
+  const lista=mkSettings(c,code).blacklist;
+  /** Scrive la lista sul marketplace scelto. Sempre come array esplicito:
+      "assente" significherebbe "eredita quella storica". */
+  const salvaLista=(nuova,opts)=>{
+    if(idx<0){ save({...c,blacklist:nuova},opts); return }
+    const l=(c.marketplaces||[]).map((m,j)=>j===idx?{...m,blacklist:nuova}:m);
+    const patch={...c,marketplaces:l};
+    // il campo storico segue il primario, cosi' un client vecchio vede il vero
+    if(idx===0) patch.blacklist=nuova;
+    save(patch,opts);
+  };
 
   // Qualunque carattere non numerico separa. Prima lo split era /[\n,;\s]+/ con
   // il solo filtro length>=8: una lista incollata con un separatore insolito
@@ -749,7 +1004,7 @@ function BlacklistTab({config:c,save,pronto=true}){
   // quindi lo stesso EAN ripetuto nello stesso incolla entrava due volte.
   const add=()=>{
     const grezzi=inp.split(/\D+/).filter(Boolean);
-    const presenti=new Set(c.blacklist), visti=new Set();
+    const presenti=new Set(lista), visti=new Set();
     const scartati=[], nuovi=[]; let ripetuti=0, gia=0;
     for(const g of grezzi){
       const e=normalizeEAN(g);
@@ -761,30 +1016,31 @@ function BlacklistTab({config:c,save,pronto=true}){
     }
     sEsito({letti:grezzi.length,aggiunti:nuovi.length,gia,ripetuti,scartati});
     // Set anche in scrittura: ripara una lista che contenga gia' dei doppioni.
-    if(nuovi.length) save({...c,blacklist:[...new Set([...c.blacklist,...nuovi])]});
+    if(nuovi.length) salvaLista([...new Set([...lista,...nuovi])]);
     if(nuovi.length||gia||ripetuti) sInp("");
   };
 
   // Riparazione della lista salvata: doppioni o voci non valide finite dentro
   // prima del fix qui sopra.
-  const sporche=c.blacklist.filter(e=>!normalizeEAN(e));
-  const doppi=c.blacklist.length-new Set(c.blacklist).size;
+  const sporche=lista.filter(e=>!normalizeEAN(e));
+  const doppi=lista.length-new Set(lista).size;
   const pulisci=()=>{
-    const ok=[...new Set(c.blacklist.map(e=>normalizeEAN(e)).filter(Boolean))];
-    sEsito({letti:c.blacklist.length,aggiunti:0,gia:0,ripetuti:doppi,scartati:sporche.map(e=>String(e).slice(0,24))});
-    save({...c,blacklist:ok},{shrinkOk:true});
+    const ok=[...new Set(lista.map(e=>normalizeEAN(e)).filter(Boolean))];
+    sEsito({letti:lista.length,aggiunti:0,gia:0,ripetuti:doppi,scartati:sporche.map(e=>String(e).slice(0,24))});
+    salvaLista(ok,{shrinkOk:true});
   };
 
   // Queste tre riducono la blacklist su richiesta esplicita: il server accetta
   // un accorciamento solo con questo flag, cosi' un salvataggio qualunque che
   // arrivi con una blacklist piu' corta viene rifiutato invece di cancellare.
-  const rm=ean=>save({...c,blacklist:c.blacklist.filter(e=>e!==ean)},{shrinkOk:true});
-  const clr=()=>{ if(confirm(`Svuotare la blacklist? Perderai tutti i ${c.blacklist.length} EAN.`)) save({...c,blacklist:[]},{shrinkOk:true}) };
+  const rm=ean=>salvaLista(lista.filter(e=>e!==ean),{shrinkOk:true});
+  const clr=()=>{ if(confirm(`Svuotare la blacklist di ${mpInfo(code).name}? Perderai tutti i ${lista.length} EAN.`)) salvaLista([],{shrinkOk:true}) };
   return(
     <div>
+      <MarketPicker config={c} value={code} onChange={setMk}/>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({c.blacklist.length})</span></h3>
-        {c.blacklist.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
+        <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Blacklist EAN <span style={{color:"var(--text-muted)",fontWeight:400,fontSize:13}}>({lista.length}) · {mpInfo(code).name}</span></h3>
+        {lista.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
       </div>
       {(sporche.length>0||doppi>0)&&(
         <Card accent="#f59e0b">
@@ -825,8 +1081,8 @@ function BlacklistTab({config:c,save,pronto=true}){
           </p>
         </Card>
       )}
-      {c.blacklist.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
-        {c.blacklist.map(ean=>(
+      {lista.length>0&&<Card><div style={{maxHeight:300,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:6}}>
+        {lista.map(ean=>(
           <span key={ean} style={{background:"var(--bl-bg)",border:"1px solid var(--bl-border)",color:"var(--bl-text)",padding:"4px 10px",borderRadius:8,fontSize:12,fontFamily:"monospace",display:"inline-flex",alignItems:"center",gap:6}}>
             {ean}<button onClick={()=>rm(ean)} style={{background:"none",border:"none",color:"var(--bl-text)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
           </span>
@@ -871,16 +1127,20 @@ function ConvertTab({config:c}){
     sRes(null);
     setTimeout(()=>{
       setProgress({phase:1,pct:5,msg:"Lettura file fornitori..."});
-      const bl=new Set(c.blacklist);
+      // Le stesse impostazioni che usa il server per questo marketplace: se qui
+      // si leggessero i valori globali, il file generato a mano differirebbe da
+      // quello del job automatico senza che niente lo segnali.
+      const st=mkSettings(c,mpC);
+      const bl=new Set(st.blacklist);
       const em={};
       let tR=0,tS=0,badEan=0,dup=0,blk=0,below=0;
       const errs=[];
       const tierCounts={},tierPriceSum={};
       const entries=Object.entries(ups);
       const total=entries.length;
-      const minStock=Number(c.minStock||0);
-      const maxQty=Number(c.maxQty||0);
-      const floorPct=Number(c.floorMarginPct||0);
+      const minStock=Number(st.minStock||0);
+      const maxQty=Number(st.maxQty||0);
+      const floorPct=Number(c.floorMarginPct??0);
 
       const step=idx=>{
         if(idx>=total){
@@ -891,7 +1151,7 @@ function ConvertTab({config:c}){
             const records=[],previewData=[],sc={};
             let priceSum=0;
             for(const it of sorted){
-              const raw=qtyMode==="fixed"?Number(mp.quantity):(it.stock!==null?it.stock:Number(mp.quantity));
+              const raw=qtyMode==="fixed"?Number(st.quantity):(it.stock!==null?it.stock:Number(st.quantity));
               const qty=maxQty>0?Math.min(raw,maxQty):raw;
               const rec={sku:it.sku,ean:it.ean,qty:qty,price:Math.round(it.price*100)/100};
               if(floorPct>0)rec.minPrice=Math.round(it.rp*(1+floorPct/100)*100)/100;
@@ -910,7 +1170,7 @@ function ConvertTab({config:c}){
               sRes({
                 records:records,
                 warnings:errs,
-                stats:{marketplace:mpC,leadtime:mp.leadtime,total_products:sorted.length,total_rows:records.length,
+                stats:{marketplace:mpC,leadtime:st.leadtime,total_products:sorted.length,total_rows:records.length,
                   zeroed:0,dropped_from_tracking:0,total_read:tR,total_skipped:tS,bad_ean:badEan,
                   below_min_stock:below,duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,by_tier:tierCounts,
                   avg_price_by_tier:avg_price_by_tier,avg_price_total:sorted.length>0?priceSum/sorted.length:0,
@@ -946,7 +1206,7 @@ function ConvertTab({config:c}){
               stock=Number.isFinite(parsed)?Math.max(0,parsed):0;
             }
             if(stock!==null&&minStock>0&&stock<minStock){below++;continue;}
-            const tiers=sup.tiers||[];
+            const tiers=tiersForClient(sup,mpC);
             const candidate={sku,ean,price:applyTiers(rp,tiers),supplier:sn,stock,tierKey:tierKeyFor(rp,tiers),rp};
             if(em[ean]){dup++;em[ean]=resolveDuplicate(em[ean],candidate,dupMode,supplierPriority);}
             else em[ean]=candidate;
@@ -1078,14 +1338,21 @@ function DownloadBox({records,stats,filename,label,accent}){
       // Un file con le sole intestazioni, caricato con "Elimina e sostituisci",
       // cancella tutto l'inventario. Non lo generiamo mai.
       if(empty)throw new Error("Nessuna riga da scrivere: rigenera prima di scaricare");
-      const t=await getFullTemplate();
-      const rows=expandRecords(records,t,{marketplace:stats.marketplace,leadtime:stats.leadtime});
+      const mk=String(stats.marketplace||"IT").toUpperCase();
+      const t=await getFullTemplate(mk);
+      // Ultima rete: il template deve essere di questo marketplace. Dieci nomi di
+      // colonna contengono l'id, quindi un template sbagliato non produce un file
+      // "un po' diverso", ne produce uno che Amazon rifiuta in blocco.
+      const atteso=mpInfo(mk).id;
+      if(t.marketplaceId&&atteso&&t.marketplaceId!==atteso)
+        throw new Error(`Il template caricato è del marketplace ${t.marketplaceId}, ma questo file è per ${mk} (${atteso}). Carica il template giusto dal tab Template.`);
+      const rows=expandRecords(records,t,{marketplace:mk,leadtime:stats.leadtime});
       const base=filename||("Offerte_"+(stats.marketplace||"IT")+"_"+new Date().toISOString().slice(0,10));
       if(kind==="xlsx"){
         const buf=buildXlsx(t,rows);
         dlBlob(buf,base+".xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       }else{
-        dlBlob(buildTxt(t,rows,{marketplace:stats.marketplace}),base+".txt","text/plain;charset=utf-8");
+        dlBlob(buildTxt(t,rows,{marketplace:mk}),base+".txt","text/plain;charset=utf-8");
       }
     }catch(e){setErr(e.message)}
     finally{setBusy(null)}
@@ -1235,43 +1502,51 @@ function StatsBlock({stats}){
 }
 
 // ─── Template Tab ────────────────────────────────────────────────────────────
-function TemplateTab(){
+function TemplateTab({config:c,mk,setMk}){
   const[info,setInfo]=useState(null);
   const[loading,setLoading]=useState(true);
   const[busy,setBusy]=useState(false);
   const[msg,setMsg]=useState(null);
   const[err,setErr]=useState(null);
+  const code=mk||mpPrimary(c);
+  const q="?mk="+encodeURIComponent(code);
 
   const load=async()=>{
-    setLoading(true);setErr(null);
-    try{const r=await fetch("/api/template");const d=await r.json();setInfo(d.info);}
+    setLoading(true);setErr(null);setMsg(null);
+    try{
+      const r=await fetch("/api/template"+q);const d=await r.json();
+      setInfo(d.info||null);
+      // Per un marketplace senza template il server risponde info:null con la
+      // spiegazione: non e' un errore di rete, e' una cosa da fare.
+      if(!d.info&&d.error)setErr(d.error);
+    }
     catch(e){setErr(e.message)}
     finally{setLoading(false)}
   };
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load()},[code]);
 
   const upload=async(file)=>{
     if(!file)return;
     setBusy(true);setErr(null);setMsg(null);
     try{
       const t=await parseTemplateFile(file);
-      const r=await fetch("/api/template",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)});
+      const r=await fetch("/api/template"+q,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)});
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
-      _templateCache=null;
+      delete _templateCache[code];
       setInfo(d.info);
-      setMsg("Template aggiornato: "+t.nCols+" colonne, dati dalla riga "+t.dataRow+".");
+      setMsg("Template di "+mpInfo(code).name+" aggiornato: "+t.nCols+" colonne, dati dalla riga "+t.dataRow+".");
     }catch(e){setErr(e.message)}
     finally{setBusy(false)}
   };
 
   const reset=async()=>{
-    if(!confirm("Tornare al template di default incluso nell'app?"))return;
+    if(!confirm(code===mpPrimary(c)?"Tornare al template di default incluso nell'app?":`Rimuovere il template di ${mpInfo(code).name}? Senza template quel marketplace non genera file.`))return;
     setBusy(true);setErr(null);setMsg(null);
     try{
-      const r=await fetch("/api/template",{method:"DELETE"});
+      const r=await fetch("/api/template"+q,{method:"DELETE"});
       const d=await r.json();
-      _templateCache=null;setInfo(d.info);setMsg("Ripristinato il template di default.");
+      delete _templateCache[code];setInfo(d.info);setMsg("Ripristinato il template di default.");
     }catch(e){setErr(e.message)}
     finally{setBusy(false)}
   };
@@ -1282,6 +1557,7 @@ function TemplateTab(){
 
   return(
     <div>
+      <MarketPicker config={c} value={code} onChange={setMk}/>
       <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
         <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
           <span style={{fontSize:24}}>📄</span>
@@ -1299,7 +1575,23 @@ function TemplateTab(){
         </div>
       </Card>
 
-      <Card accent={ok?"#10b981":"#ef4444"}>
+      {!info&&(
+        <Card accent="#f59e0b">
+          <h4 style={{margin:"0 0 6px",color:"#f59e0b"}}>Nessun template per {mpInfo(code).name}</h4>
+          <p style={{margin:"0 0 10px",fontSize:13,color:"var(--text)",lineHeight:1.6}}>
+            Senza template questo marketplace non genera nessun file. Scaricalo da Seller Central
+            <strong> con il marketplace impostato su {mpInfo(code).name}</strong> — Catalogo → Aggiungi prodotti
+            tramite caricamento → Scarica un foglio di calcolo — e caricalo qui. Il file italiano non va bene:
+            dieci nomi di colonna contengono l'id del marketplace.
+          </p>
+          <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1,display:"inline-block"}}>
+            {busy?"⏳ Elaboro...":"⬆ Carica il template di "+mpInfo(code).name}
+            <input type="file" accept=".xlsm,.xlsx,.xls" style={{display:"none"}} disabled={busy} onChange={e=>upload(e.target.files[0])}/>
+          </label>
+        </Card>
+      )}
+
+      {info&&<Card accent={ok?"#10b981":"#ef4444"}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
           <div>
             <h4 style={{margin:"0 0 4px",color:ok?"#10b981":"#ef4444"}}>{ok?"✓ Template valido":"⚠️ Template incompleto"}</h4>
@@ -1314,7 +1606,7 @@ function TemplateTab(){
               {busy?"⏳ Elaboro...":"⬆ Carica template Amazon"}
               <input type="file" accept=".xlsm,.xlsx,.xls" style={{display:"none"}} disabled={busy} onChange={e=>upload(e.target.files[0])}/>
             </label>
-            {!info.isSeed&&<Btn v="ghost" onClick={reset} disabled={busy} style={{fontSize:13}}>Ripristina default</Btn>}
+            {!info.isSeed&&<Btn v="ghost" onClick={reset} disabled={busy} style={{fontSize:13}}>{code===mpPrimary(c)?"Ripristina default":"Rimuovi template"}</Btn>}
           </div>
         </div>
 
@@ -1365,7 +1657,7 @@ function TemplateTab(){
             Mancano campi obbligatori: {info.missing.map(m=>FIELD_LABELS[m]||m).join(", ")}. Carica un template completo.
           </div>
         )}
-      </Card>
+      </Card>}
 
       {msg&&<Card accent="#10b981"><p style={{color:"#10b981",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
       {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13}}>❌ {err}</p></Card>}
@@ -1374,30 +1666,36 @@ function TemplateTab(){
 }
 
 // ─── Tab ASIN (mappa verificata + registro SKU) ──────────────────────────────
-function AsinTab({config:c,save}){
+function AsinTab({config:c,save,mk,setMk}){
   const[map,setMap]=useState(null);
   const[reg,setReg]=useState(null);
   const[busy,setBusy]=useState(null);
   const[msg,setMsg]=useState(null);
   const[err,setErr]=useState(null);
-  const[onlyMapped,setOnlyMapped]=useState(!!c.onlyMapped);
+  const code=mk||mpPrimary(c);
+  const q="?mk="+encodeURIComponent(code);
+  // La spunta "solo ASIN verificati" e' per marketplace: su DE puo' convenire
+  // accenderla anche se su IT costa troppe offerte.
+  const st=mkSettings(c,code);
+  const[onlyMapped,setOnlyMapped]=useState(!!st.onlyMapped);
+  useEffect(()=>{setOnlyMapped(!!mkSettings(c,code).onlyMapped)},[code]);
 
   const load=async()=>{
-    setErr(null);
+    setErr(null);setMsg(null);setMap(null);setReg(null);
     try{
-      const[a,b]=await Promise.all([fetch("/api/asinmap"),fetch("/api/published")]);
+      const[a,b]=await Promise.all([fetch("/api/asinmap"+q),fetch("/api/published"+q)]);
       if(a.ok)setMap((await a.json()).info);
       if(b.ok)setReg((await b.json()).info);
     }catch(e){setErr(e.message)}
   };
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load()},[code]);
 
   const upload=async(kind,file,replace)=>{
     if(!file)return;
     setBusy(kind);setErr(null);setMsg(null);
     try{
       const text=await file.text();
-      const url=kind==="map"?("/api/asinmap"+(replace?"?replace=1":"")):"/api/published";
+      const url=kind==="map"?("/api/asinmap"+q+(replace?"&replace=1":"")):("/api/published"+q);
       const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:text});
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
@@ -1414,12 +1712,18 @@ function AsinTab({config:c,save}){
   const clearMap=async()=>{
     if(!confirm("Svuotare la mappa? Senza ASIN verificato l'abbinamento torna a farlo Amazon, che è la causa degli ordini sbagliati."))return;
     setBusy("clear");setErr(null);setMsg(null);
-    try{await fetch("/api/asinmap",{method:"DELETE"});setMsg("Mappa svuotata.");await load();}
+    try{await fetch("/api/asinmap"+q,{method:"DELETE"});setMsg("Mappa di "+mpInfo(code).name+" svuotata.");await load();}
     catch(e){setErr(e.message)}finally{setBusy(null)}
   };
 
   const toggleOnlyMapped=()=>{
-    const v=!onlyMapped;setOnlyMapped(v);save({...c,onlyMapped:v});
+    const v=!onlyMapped;setOnlyMapped(v);
+    const idx=(c.marketplaces||[]).findIndex(m=>String(m.code).toUpperCase()===code);
+    if(idx<0){ save({...c,onlyMapped:v}); return }
+    const l=(c.marketplaces||[]).map((m,j)=>j===idx?{...m,onlyMapped:v}:m);
+    const patch={...c,marketplaces:l};
+    if(idx===0) patch.onlyMapped=v;   // il campo storico segue il primario
+    save(patch);
     setMsg(v?"Da adesso vengono pubblicati solo gli EAN con ASIN verificato.":"Da adesso vengono pubblicati anche gli EAN senza ASIN verificato (abbinamento fatto da Amazon).");
   };
 
@@ -1427,6 +1731,7 @@ function AsinTab({config:c,save}){
 
   return(
     <div>
+      <MarketPicker config={c} value={code} onChange={setMk}/>
       <Card style={{background:"var(--info-bg)",border:"1px solid var(--info-border)"}}>
         <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
           <span style={{fontSize:24}}>🔗</span>
@@ -1637,52 +1942,72 @@ function RulesTab({config:c,save}){
 // ─── Auto Tab (FTP + file pronto) ────────────────────────────────────────────
 function AutoTab({config:c}){
   const[status,setStatus]=useState("loading"); // loading | ready | empty | error
-  const[latest,setLatest]=useState(null);
-  const[pending,setPending]=useState(null);
-  const[tinfo,setTinfo]=useState(null);
+  const[byMarket,setByMarket]=useState({});
+  const[tinfo,setTinfo]=useState({});          // per marketplace
   const[generating,setGenerating]=useState(false);
   const[acting,setActing]=useState(false);
   const[err,setErr]=useState(null);
   const[note,setNote]=useState(null);
   const[saving,setSaving]=useState(false);
-  const[view,setView]=useState("latest"); // latest | pending
+
+  const codes=mpCodes(c);
 
   const load=async()=>{
     setStatus("loading");setErr(null);
     try{
-      const[r1,r2]=await Promise.all([fetch("/api/ftp-convert"),fetch("/api/template")]);
-      if(!r1.ok)throw new Error("HTTP "+r1.status);
-      const d=await r1.json();
-      setLatest(d.latest||null);setPending(d.pending||null);
-      if(r2.ok){const t=await r2.json();setTinfo(t.info);}
-      setView(d.pending?"pending":"latest");
-      setStatus(d.latest||d.pending?"ready":"empty");
+      const r=await fetch("/api/ftp-convert");
+      if(!r.ok)throw new Error("HTTP "+r.status);
+      const d=await r.json();
+      // Un client aggiornato usa byMarket; se il server fosse ancora quello
+      // vecchio, latest/pending del primario servono da ripiego.
+      const bm=d.byMarket||{[mpPrimary(c)]:{latest:d.latest||null,pending:d.pending||null}};
+      setByMarket(bm);
+
+      const ti={};
+      await Promise.all((d.marketplaces||codes).map(async code=>{
+        try{
+          const t=await fetch("/api/template?mk="+encodeURIComponent(code));
+          if(t.ok){const x=await t.json();ti[code]=x.info||null}
+        }catch{}
+      }));
+      setTinfo(ti);
+
+      const qualcosa=Object.values(bm).some(v=>v.latest||v.pending);
+      setStatus(qualcosa?"ready":"empty");
     }catch(e){setErr(e.message);setStatus("error")}
   };
   useEffect(()=>{load()},[]);
 
-  const generate=async(force)=>{
+  /** Rigenera tutti i marketplace attivi, oppure uno solo. I CSV li scarica il
+      server una volta sola anche quando i marketplace sono due. */
+  const generate=async(force,code)=>{
     setGenerating(true);setErr(null);setNote(null);
     try{
-      const r=await fetch("/api/ftp-convert",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({marketplace:c.marketplaces[0]?.code||"IT",dupMode:c.dupMode||"price",qtyMode:c.qtyMode||"catalog",force:!!force})});
+      const body={dupMode:c.dupMode||"price",qtyMode:c.qtyMode||"catalog",force:!!force};
+      if(code)body.marketplace=code;
+      const r=await fetch("/api/ftp-convert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
-      if(d.quarantined)setNote("Il controllo di sicurezza ha bloccato la pubblicazione. Il risultato è in quarantena: controllalo e conferma se è corretto.");
+      const righe=(d.results||[]).map(x=>
+        x.error?`${x.marketplace}: ${x.error}`
+        :x.quarantined?`${x.marketplace}: in quarantena — ${(x.safety?.blockers||[]).join(" · ")}`
+        :`${x.marketplace}: ${x.stats?.total_products?.toLocaleString?.()??"?"} prodotti attivi, ${x.stats?.zeroed??"?"} disattivati`);
+      if(righe.length)setNote(righe.join("\n"));
       await load();
     }catch(e){setErr(e.message)}
     finally{setGenerating(false)}
   };
 
-  const publishAction=async(action)=>{
-    if(action==="promote"&&!confirm("Pubblicare comunque il risultato in quarantena come ultimo file pronto?"))return;
-    if(action==="discard"&&!confirm("Scartare il risultato in quarantena?"))return;
+  const publishAction=async(action,code)=>{
+    const nome=mpInfo(code).name;
+    if(action==="promote"&&!confirm(`Pubblicare comunque il risultato in quarantena di ${nome} come ultimo file pronto?`))return;
+    if(action==="discard"&&!confirm(`Scartare il risultato in quarantena di ${nome}?`))return;
     setActing(true);setErr(null);setNote(null);
     try{
-      const r=await fetch("/api/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
+      const r=await fetch("/api/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,marketplace:code})});
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
-      setNote(action==="promote"?"Risultato promosso a file pronto.":"Risultato in quarantena scartato.");
+      setNote(action==="promote"?`${nome}: risultato promosso a file pronto.`:`${nome}: risultato in quarantena scartato.`);
       await load();
     }catch(e){setErr(e.message)}
     finally{setActing(false)}
@@ -1697,8 +2022,8 @@ function AutoTab({config:c}){
     finally{setSaving(false)}
   };
 
-  const fmtDate=iso=>iso?new Date(iso).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
-  const shown=view==="pending"?pending:latest;
+  const attivi=(c.marketplaces||[]).filter(m=>m.enabled!==false).map(m=>String(m.code).toUpperCase());
+  const daMostrare=codes.filter(code=>attivi.includes(code)||byMarket[code]?.latest||byMarket[code]?.pending);
 
   return(
     <div>
@@ -1709,30 +2034,73 @@ function AutoTab({config:c}){
           <div style={{fontSize:12,color:"var(--info-text)",lineHeight:1.6}}>
             <div style={{fontWeight:700,marginBottom:4}}>Generazione automatica attiva</div>
             Ogni mattina alle <strong>9:15</strong> (10:15 con l'ora legale), da lunedì a sabato, il sistema scarica i CSV
-            dall'FTP, converte nel formato del template Amazon e tiene il file pronto qui.
+            dall'FTP <strong>una volta sola</strong> e prepara un file per ogni marketplace attivo.
             <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid var(--info-border)"}}>
               <strong>Su Seller Central carica con “Aggiungi prodotti e modifica il tuo inventario”</strong>, non con
               “Modifica e sostituisci”. Gli articoli non più disponibili sono già nel file con quantità 0, quindi non
               serve cancellare e ricreare il catalogo ogni giorno.
+              {daMostrare.length>1&&<div style={{marginTop:6}}>
+                Ogni file va caricato <strong>sul suo marketplace</strong>: cambia marketplace in Seller Central prima di caricare.
+              </div>}
             </div>
           </div>
         </div>
       </Card>
 
-      {/* Righe col solo EAN.
-          Prima era sempre arancione: un avviso acceso ogni mattina su un numero
-          che cambia poco smette di essere letto. Ora è informativo, e diventa
-          arancione solo se il numero peggiora rispetto al file precedente. */}
+      {/* Comandi */}
+      <Card>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <Btn v="pri" onClick={()=>generate(false)} disabled={generating} style={{fontSize:14,padding:"10px 24px"}}>
+            {generating?"⏳ Scarico dall'FTP...":(daMostrare.length>1?"📥 Genera adesso tutti":"📥 Genera adesso da FTP")}
+          </Btn>
+          <Btn v="ghost" onClick={load} disabled={generating} style={{fontSize:13}}>↻ Ricarica</Btn>
+          <span style={{fontSize:11,color:"var(--text-muted)"}}>
+            {attivi.length?attivi.map(code=>`${code} · gestione ${mkSettings(c,code).leadtime}gg`).join("   •   "):"nessun marketplace attivo"}
+          </span>
+        </div>
+      </Card>
+
+      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>❌ {err}</p></Card>}
+      {note&&<Card accent="#6366f1"><p style={{color:"var(--accent-form)",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>ℹ️ {note}</p></Card>}
+
+      {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Caricamento...</p></Card>}
+      {status!=="loading"&&daMostrare.length===0&&(
+        <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>
+          Nessun marketplace attivo. Aggiungine uno dal tab 🌍 Marketplace.
+        </p></Card>
+      )}
+
+      {status!=="loading"&&daMostrare.map(code=>(
+        <MarketBlock key={code} code={code} config={c}
+          data={byMarket[code]||{latest:null,pending:null}}
+          tinfo={tinfo[code]} molti={daMostrare.length>1}
+          generating={generating} acting={acting} saving={saving}
+          onGenerate={generate} onPublish={publishAction} onSaveHistory={saveToHistory}/>
+      ))}
+    </div>
+  );
+}
+
+/** Tutto quello che riguarda un solo marketplace nel tab Auto. */
+function MarketBlock({code,config:c,data,tinfo,molti,generating,acting,saving,onGenerate,onPublish,onSaveHistory}){
+  const[view,setView]=useState("latest");
+  const {latest,pending}=data;
+  useEffect(()=>{setView(pending?"pending":"latest")},[!!pending]);
+  const shown=view==="pending"?pending:latest;
+  const fmtDate=iso=>iso?new Date(iso).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+
+  const corpo=(
+    <div>
+      {/* Righe col solo EAN: informativo, arancione solo se peggiora. */}
       {latest&&latest.stats&&latest.stats.without_asin>0&&(()=>{
         const now=latest.stats.without_asin, tot=latest.stats.total_rows||0;
         const before=typeof latest.prev?.without_asin==="number"?latest.prev.without_asin:null;
         const delta=before===null?null:now-before;
         const worse=delta!==null&&delta>0;
         const pct=tot?Math.round(now/tot*100):0;
-        const col=worse?"#f59e0b":"var(--text-muted)";
         return(
           <Card accent={worse?"#f59e0b":undefined}>
-            <p style={{color:col,margin:0,fontSize:13,lineHeight:1.6}}>
+            <p style={{color:worse?"#f59e0b":"var(--text-muted)",margin:0,fontSize:13,lineHeight:1.6}}>
               {worse?"⚠️":"ℹ️"} <strong>{now.toLocaleString()}</strong> righe su {tot.toLocaleString()} ({pct}%)
               sono inviate col solo EAN: per quelle l'abbinamento alla pagina prodotto lo decide Amazon.
               {delta===null?" Non ho un file precedente con cui confrontarlo.":
@@ -1746,31 +2114,22 @@ function AutoTab({config:c}){
         );
       })()}
 
+      {tinfo===null&&(
+        <Card accent="#ef4444">
+          <p style={{color:"#ef4444",margin:0,fontSize:13,lineHeight:1.6}}>
+            ⚠️ Nessun template caricato per {mpInfo(code).name}: questo marketplace non genera nessun file.
+            Caricalo dal tab 📄 Template scegliendo {mpInfo(code).name}.
+          </p>
+        </Card>
+      )}
       {tinfo&&tinfo.missing&&tinfo.missing.length>0&&(
         <Card accent="#ef4444">
           <p style={{color:"#ef4444",margin:0,fontSize:13}}>
-            ⚠️ Il template in uso non ha tutte le colonne obbligatorie. Vai nel tab 📄 Template e caricane uno valido.
+            ⚠️ Il template di {mpInfo(code).name} non ha tutte le colonne obbligatorie. Vai nel tab 📄 Template.
           </p>
         </Card>
       )}
 
-      {/* Comandi */}
-      <Card>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <Btn v="pri" onClick={()=>generate(false)} disabled={generating} style={{fontSize:14,padding:"10px 24px"}}>
-            {generating?"⏳ Scarico dall'FTP...":"📥 Genera adesso da FTP"}
-          </Btn>
-          <Btn v="ghost" onClick={load} disabled={generating} style={{fontSize:13}}>↻ Ricarica</Btn>
-          <span style={{fontSize:11,color:"var(--text-muted)"}}>
-            Marketplace {c.marketplaces[0]?.code||"—"} • tempo di gestione {c.marketplaces[0]?.leadtime??"—"} gg
-          </span>
-        </div>
-      </Card>
-
-      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>❌ {err}</p></Card>}
-      {note&&<Card accent="#6366f1"><p style={{color:"var(--accent-form)",margin:0,fontSize:13}}>ℹ️ {note}</p></Card>}
-
-      {/* Quarantena */}
       {pending&&(
         <Card accent="#f59e0b">
           <h4 style={{margin:"0 0 6px",color:"#f59e0b"}}>⏸️ Risultato in quarantena</h4>
@@ -1781,14 +2140,13 @@ function AutoTab({config:c}){
             {(pending.safety?.blockers||[]).map((b,i)=><li key={i} style={{fontSize:12,color:"#f59e0b",marginBottom:4}}>{b}</li>)}
           </ul>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-            <Btn v="ok" onClick={()=>publishAction("promote")} disabled={acting} style={{fontSize:13}}>✓ Pubblica comunque</Btn>
-            <Btn v="danger" onClick={()=>publishAction("discard")} disabled={acting} style={{fontSize:13}}>✕ Scarta</Btn>
-            <Btn v="ghost" onClick={()=>generate(true)} disabled={generating} style={{fontSize:13}}>↻ Rigenera e forza</Btn>
+            <Btn v="ok" onClick={()=>onPublish("promote",code)} disabled={acting} style={{fontSize:13}}>✓ Pubblica comunque</Btn>
+            <Btn v="danger" onClick={()=>onPublish("discard",code)} disabled={acting} style={{fontSize:13}}>✕ Scarta</Btn>
+            <Btn v="ghost" onClick={()=>onGenerate(true,code)} disabled={generating} style={{fontSize:13}}>↻ Rigenera e forza</Btn>
           </div>
         </Card>
       )}
 
-      {/* Selettore vista */}
       {latest&&pending&&(
         <div style={{display:"flex",gap:8,marginBottom:14}}>
           {[["latest","📦 Ultimo pronto"],["pending","⏸️ In quarantena"]].map(([v,l])=>(
@@ -1804,14 +2162,17 @@ function AutoTab({config:c}){
           <h4 style={{margin:"0 0 6px",color:"#ef4444"}}>⚠️ Risultato della versione precedente</h4>
           <p style={{fontSize:12,color:"var(--text-muted)",margin:0,lineHeight:1.6}}>
             Questo risultato è stato salvato dalla versione precedente dell'app, che teneva il file
-            in un altro formato. Le righe non sono rileggibili: premi “Genera adesso da FTP” prima di
+            in un altro formato. Le righe non sono rileggibili: premi “Genera adesso” prima di
             scaricare qualsiasi cosa.
           </p>
         </Card>
       )}
 
-      {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Caricamento...</p></Card>}
-      {status==="empty"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessun file ancora generato. Premi “Genera adesso da FTP”.</p></Card>}
+      {!latest&&!pending&&(
+        <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>
+          Nessun file ancora generato per {mpInfo(code).name}.
+        </p></Card>
+      )}
 
       {shown&&shown.stats&&(
         <div>
@@ -1825,9 +2186,12 @@ function AutoTab({config:c}){
                   Generato il {fmtDate(shown.stats.generated_at)} • {shown.filename} • {shown.source}
                 </div>
               </div>
-              <Btn v="ghost" onClick={()=>saveToHistory(shown.stats)} disabled={saving} style={{fontSize:13}}>
-                {saving?"Salvataggio...":"📊 Salva nello storico"}
-              </Btn>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {molti&&<Btn v="ghost" onClick={()=>onGenerate(false,code)} disabled={generating} style={{fontSize:12}}>↻ Solo {code}</Btn>}
+                <Btn v="ghost" onClick={()=>onSaveHistory(shown.stats)} disabled={saving} style={{fontSize:13}}>
+                  {saving?"Salvataggio...":"📊 Salva nello storico"}
+                </Btn>
+              </div>
             </div>
 
             <DownloadBox records={shown.records||[]} stats={shown.stats} filename={shown.filename}
@@ -1841,6 +2205,18 @@ function AutoTab({config:c}){
           <PreviewTable previewData={shown.stats.previewData} total={shown.stats.total_rows}/>
         </div>
       )}
+    </div>
+  );
+
+  if(!molti)return corpo;
+  const spento=(c.marketplaces||[]).some(m=>String(m.code).toUpperCase()===code&&m.enabled===false);
+  return(
+    <div style={{marginBottom:22,paddingTop:8,borderTop:"1px solid var(--border)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,margin:"10px 0 12px"}}>
+        <h3 style={{margin:0,fontSize:18,color:"var(--text)"}}>{mpInfo(code).name}</h3>
+        {spento&&<span style={S.badge("var(--badge-neutral)")}>non attivo</span>}
+      </div>
+      {corpo}
     </div>
   );
 }
@@ -1908,6 +2284,9 @@ function ThemeToggle({theme,toggle}){
 function App(){
   const[c,sC]=useState(DEFAULT);
   const[tab,sTab]=useState("auto");
+  // Marketplace selezionato nei tab che lavorano su dati separati (Template,
+  // ASIN, Blacklist). Si allinea al primario quando arriva la configurazione.
+  const[mk,setMk]=useState(null);
   const[ok,sOk]=useState(false);
   const[syncStatus,setSyncStatus]=useState("idle");
   const[pronto,setPronto]=useState(false);   // true = config del server ricevuta, si puo' scrivere
@@ -1926,7 +2305,8 @@ function App(){
     // quella buona (113 EAN di blacklist persi cosi', senza un avviso).
     const local=loadLocal();sC(local);sOk(true);setSyncStatus("syncing");
     loadRemote().then(remote=>{
-      if(remote){const migrated=migrate(remote);sC(migrated);persistLocal(migrated);setRev(remote.rev||0);setPronto(true);setSyncStatus("synced");}
+      if(remote){const migrated=migrate(remote);sC(migrated);persistLocal(migrated);setRev(remote.rev||0);setPronto(true);setSyncStatus("synced");
+        setMk(p=>p&&mpCodes(migrated).includes(p)?p:mpPrimary(migrated));}
       else {setPronto(true);setSyncStatus("idle");}   // nessuna config sul server: la locale e' l'unica cosa che c'e'
     }).catch(()=>{setSyncStatus("error");setErrSync("Non riesco a leggere la configurazione dal server: la pagina resta in sola lettura per non sovrascrivere i dati buoni. Ricarica.");});
     // Conta alert non letti
@@ -1964,6 +2344,10 @@ function App(){
 
   if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>Caricamento...</div>;
 
+  // Il marketplace selezionato puo' non esistere piu' (rimosso mentre era
+  // aperto): in quel caso si ricade sul primario invece di rompere il tab.
+  const mkSel=(mk&&mpCodes(c).includes(mk))?mk:mpPrimary(c);
+
   const tabs=[
     {id:"auto",   label:"🤖 Auto"},
     {id:"template",label:"📄 Template"},
@@ -1972,7 +2356,7 @@ function App(){
     {id:"convert",label:"⚡ Manuale"},
     {id:"suppliers",label:"🏭 Fornitori",n:c.suppliers.length},
     {id:"marketplaces",label:"🌍 Marketplace",n:c.marketplaces.length},
-    {id:"blacklist",label:"🚫 Blacklist",n:c.blacklist.length},
+    {id:"blacklist",label:"🚫 Blacklist",n:mkSettings(c,mkSel).blacklist.length},
     {id:"history",label:"📊 Storico"},
   ];
 
@@ -2025,12 +2409,12 @@ function App(){
           </Card>
         )}
         {tab==="auto"&&<AutoTab config={c}/>}
-        {tab==="template"&&<TemplateTab/>}
-        {tab==="asin"&&<AsinTab config={c} save={save}/>}
+        {tab==="template"&&<TemplateTab config={c} mk={mkSel} setMk={setMk}/>}
+        {tab==="asin"&&<AsinTab config={c} save={save} mk={mkSel} setMk={setMk}/>}
         {tab==="rules"&&<RulesTab config={c} save={save}/>}
         {tab==="suppliers"&&<SuppliersTab config={c} save={save}/>}
         {tab==="marketplaces"&&<MarketplacesTab config={c} save={save}/>}
-        {tab==="blacklist"&&<BlacklistTab config={c} save={save} pronto={pronto}/>}
+        {tab==="blacklist"&&<BlacklistTab config={c} save={save} pronto={pronto} mk={mkSel} setMk={setMk}/>}
         {tab==="convert"&&<ConvertTab config={c}/>}
         {tab==="history"&&<HistoryTab/>}
       </div>

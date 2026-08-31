@@ -74,14 +74,14 @@ Nel repo c'è un template di default (`_lib/templateSeed.mjs`, estratto da
 
 | Tab | A cosa serve |
 |---|---|
-| 🤖 **Auto** | file pronto, generazione manuale da FTP, quarantena, download .xlsx/.txt |
-| 📄 **Template** | carica il template Amazon, verifica i campi riconosciuti |
-| 🔗 **ASIN** | mappa verificata EAN→ASIN e registro delle SKU pubblicate |
+| 🤖 **Auto** | un blocco per marketplace: file pronto, generazione da FTP, quarantena, download .xlsx/.txt |
+| 📄 **Template** | carica il template Amazon, verifica i campi riconosciuti, **uno per marketplace** |
+| 🔗 **ASIN** | mappa verificata EAN→ASIN e registro delle SKU pubblicate, **per marketplace** |
 | ⚙️ **Regole** | stock minimo, tetto quantità, giorni di quantità 0, soglie del guard-rail |
 | ⚡ **Manuale** | percorso di riserva: carichi i CSV a mano se l'FTP non risponde |
-| 🏭 **Fornitori** | colonne del CSV, delimitatore, cartella FTP, fasce di rincaro |
-| 🌍 **Marketplace** | quantità di fallback e tempo di gestione |
-| 🚫 **Blacklist** | EAN da non pubblicare mai |
+| 🏭 **Fornitori** | colonne del CSV, delimitatore, cartella FTP, fasce di rincaro (dedicate o ereditate, per marketplace) |
+| 🌍 **Marketplace** | quali cataloghi, id marketplace, quantità di fallback, tempo di gestione, stock minimo |
+| 🚫 **Blacklist** | EAN da non pubblicare mai, **per marketplace** |
 | 📊 **Storico** | trend delle conversioni |
 
 ---
@@ -103,22 +103,68 @@ compaiono i motivi del blocco con i pulsanti *Pubblica comunque* / *Scarta* / *R
 
 ---
 
+## Più di un marketplace
+
+Un'esecuzione produce **un file per marketplace attivo**. I CSV dei fornitori si scaricano
+una volta sola: sono gli stessi articoli, cambia solo come vengono scritti e prezzati.
+
+Cosa è **separato** per marketplace, e perché:
+
+| Dato | Perché non si può condividere |
+|---|---|
+| **Template** | dieci nomi di colonna contengono l'id del marketplace (`purchasable_offer[marketplace_id=…]`, `merchant_shipping_group[marketplace_id=…]`). Un template italiano caricato su Amazon.de viene rifiutato in blocco. |
+| **Registro SKU pubblicate** | un registro condiviso spegnerebbe a vicenda gli EAN presenti su un solo catalogo: un articolo che esiste solo su IT arriverebbe a DE con quantità 0. |
+| **Mappa EAN→ASIN** | l'ASIN è per marketplace. Lo stesso EAN può avere pagine diverse su .it e .de, e un ASIN sbagliato pubblica l'offerta sulla pagina di un altro pneumatico. |
+| **Blacklist** | le autorizzazioni marca e i blocchi valgono su un catalogo alla volta: una marca bloccata su IT può essere vendibile su DE. |
+| **Fasce di rincaro** | opzionali (`tiersByMarket`). Concorrenza e spedizione non sono le stesse. Se un marketplace non ne ha di dedicate usa quelle del fornitore. |
+| **Ultimo risultato / quarantena** | il guard-rail confronta ogni marketplace **con se stesso**: confrontare il primo file tedesco con l'ultimo italiano darebbe una variazione del 100% e bloccherebbe sempre. |
+
+Il **primo marketplace della lista è il primario**: eredita i dati salvati quando ne
+esisteva uno solo (chiavi Blobs senza suffisso). Gli altri partono vuoti — e devono, perché
+"chiave mancante" su DE non può voler dire "usa i dati italiani".
+
+```
+Blobs:  ftp-results/latest        ← primario (compatibilità)
+        ftp-results/latest-DE     ← ogni altro marketplace
+        amz-published/skus-DE
+        amz-asinmap/current-DE
+        amz-template/current-DE
+```
+
+Con **un solo marketplace configurato l'interfaccia resta identica a prima**: il selettore
+non compare e i tab non cambiano. Verificato con un rendering headless dedicato.
+
+Un marketplace che fallisce (template mancante, template sbagliato) **non ferma gli altri**:
+`convertForMarket` restituisce l'errore invece di sollevarlo, il file italiano esce comunque
+e l'errore diventa un alert `[DE] …`.
+
+---
+
 ## Architettura
 
 ```
-Fornitori → FTPS  (netlify/functions/_lib/ftp.mjs)
+Fornitori → FTPS  (netlify/functions/_lib/ftp.mjs)   ← un solo scarico
    ↓
 scheduled-convert.mjs   (cron "15 8 * * 1-6")
-   ↓ parseCSV → validazione EAN → dedup → fasce di rincaro → quantità 0
-   ↓ safetyCheck
-Blobs:  ftp-results/latest | ftp-results/pending
-        amz-published/skus         ← storico delle SKU pubblicate
-        amz-template/current       ← template caricato
-        conversion-history/*       ← storico (potato a 180 record)
+   ↓ per ogni marketplace attivo:
+   ↓   _lib/convertRun.mjs → convertForMarket()
+   ↓     parseCSV → validazione EAN → dedup → fasce del marketplace → quantità 0
+   ↓     safetyCheck (contro il file precedente DELLO STESSO marketplace)
+Blobs:  ftp-results/latest[-CODE] | ftp-results/pending[-CODE]
+        amz-published/skus[-CODE]      ← registro delle SKU pubblicate
+        amz-asinmap/current[-CODE]     ← mappa verificata EAN→ASIN
+        amz-template/current[-CODE]    ← template caricato
+        conversion-history/*           ← storico (potato a 180 record)
         amz-alerts/active
    ↓
 index.html  → expandRecords → buildXlsx / buildTxt  (SheetJS nel browser)
 ```
+
+`_lib/marketplace.mjs` è l'unico posto che risolve impostazioni e chiavi:
+`settingsFor(config, code)` (override del marketplace → globale → default),
+`tiersFor(supplier, code)`, `keyFor(base, code)`, `migrateConfig(raw)`.
+`_lib/convertRun.mjs` è l'unica conversione: il job notturno e il pulsante "Genera adesso"
+chiamano la stessa funzione, così non possono divergere come facevano quando erano due copie.
 
 I record salvati su Blobs sono **compatti** (`{sku, ean, qty, price}`): righe larghe 140
 colonne significherebbero megabyte di stringhe vuote da salvare e da spedire al browser.
@@ -128,12 +174,12 @@ L'espansione al formato template avviene solo al momento del download.
 
 | Endpoint | Metodi |
 |---|---|
-| `/api/config` | GET, POST |
-| `/api/template` | GET (`?full=1` per le intestazioni), POST, DELETE |
-| `/api/asinmap` | GET (`?full=1`), POST (CSV, `?replace=1`), DELETE |
-| `/api/published` | GET, POST (report offerte attive), DELETE |
-| `/api/ftp-convert` | GET (`?rows=0` per la sola diagnostica), POST (`{force}`) |
-| `/api/publish` | POST `{action:"promote"\|"discard"}` |
+| `/api/config` | GET, POST (con `rev` per il controllo di concorrenza) |
+| `/api/template` | GET (`?full=1` per le intestazioni), POST, DELETE — tutti con `?mk=CODICE` |
+| `/api/asinmap` | GET (`?full=1`), POST (CSV, `?replace=1`), DELETE — tutti con `?mk=CODICE` |
+| `/api/published` | GET, POST (report offerte attive), DELETE — tutti con `?mk=CODICE` |
+| `/api/ftp-convert` | GET (`?rows=0` diagnostica, `?mk=` un solo marketplace), POST (`{force, marketplace}`) |
+| `/api/publish` | POST `{action:"promote"\|"discard", marketplace}` |
 | `/api/history` | GET, POST, DELETE `?id=` |
 | `/api/alerts` | GET, POST `{action}` |
 
@@ -243,3 +289,22 @@ fornitore, le offerte attive su Amazon il cui EAN il fornitore non manda più no
 mai nel registro: restavano acquistabili a tempo indeterminato su merce non ordinabile
 (92 casi). Si carica il report offerte attive dal tab 🔗 ASIN e quelle SKU entrano nel
 registro, uscendo a quantità 0 al primo file utile.
+
+---
+
+## Un catalogo nuovo, da zero
+
+1. Tab **🌍 Marketplace** → *+ Aggiungi* → scegli il paese. L'id marketplace si compila da
+   solo per i paesi verificati; per gli altri lo si legge dal template al primo caricamento.
+2. Tab **📄 Template** → scegli il marketplace nel selettore → scarica il template **da
+   Seller Central con quel marketplace selezionato** e caricalo. Un template di un altro
+   marketplace viene rifiutato con l'id sbagliato in chiaro, non salvato in silenzio.
+3. Tab **🏭 Fornitori** → *Modifica* → *Fasce per* → il nuovo marketplace. Di default
+   eredita le fasce del primario; *Fasce dedicate* ne crea una copia modificabile.
+4. Tab **🚫 Blacklist** e **🔗 ASIN**: partono vuoti. La mappa ASIN di un marketplace non
+   vale per un altro e va rifatta con una ricerca prodotti su quel marketplace.
+5. Tab **🤖 Auto** → *Genera adesso tutti*. Ogni file va caricato **sul suo marketplace**:
+   cambia marketplace in Seller Central prima di caricare.
+
+Un marketplace con la spunta *attivo* togliata non genera file ma **non perde niente**:
+template, mappa, blacklist e registro restano dove sono.

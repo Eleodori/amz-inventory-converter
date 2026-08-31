@@ -652,6 +652,118 @@ t("riepilogo per marketplace", () => {
   assert.equal(r[1].blacklist, 0);
 });
 
+console.log("\n── due marketplace nello stesso giro ──");
+{
+  // Template DE vero, letto dalla fixture come lo leggerebbe il browser.
+  function templateDE() {
+    const F = "fixtures/template_amazon_de_riferimento.xlsm";
+    if (!fs.existsSync(F)) return null;
+    const wb = XLSX.read(fs.readFileSync(F), { type: "buffer" });
+    const sh = wb.Sheets["Vorlage"], rng = XLSX.utils.decode_range(sh["!ref"]);
+    const at = (r, c) => { const k = XLSX.utils.encode_cell({ r, c }); return sh[k] ? String(sh[k].v) : "" };
+    let nCols = 0;
+    for (const ri of [3, 4]) for (let c = rng.e.c; c >= 0; c--) if (at(ri, c).trim() !== "") { nCols = Math.max(nCols, c + 1); break }
+    const pad = r => { const a = []; for (let c = 0; c < nCols; c++) a.push(at(r, c)); return a };
+    return {
+      source: "ListingLoader.xlsm", sheetName: "Vorlage", nCols,
+      labelRow: 4, attributeRow: 5, dataRow: 7,
+      marketplaceId: "A1PA6795UKMFR9", contentLanguageTag: "de_DE",
+      vocabLists: extractVocabLists(wb, XLSX),
+      headerRows: [pad(0), pad(1), pad(2), pad(3), pad(4), pad(5)],
+    };
+  }
+
+  const tplIT = seedTemplate();
+  const tplDE = templateDE();
+
+  const CSV2 = [
+    "sku;ean;stock;price",
+    `A1;${E1};40;100.00`,   // costo 100 → sotto la soglia 120
+    `A2;${E2};40;200.00`,   // costo 200 → sopra la soglia
+    `A3;${E3};40;150.00`,
+  ].join("\n");
+
+  const CFG2 = {
+    suppliers: [{
+      name: "Deldo", delimiter: ";", skuCol: "sku", eanCol: "ean", stockCol: "stock", priceCol: "price",
+      tiers: [{ upTo: 120, markupPct: 10, flatFee: 12 }, { upTo: null, markupPct: 10, flatFee: 16 }],
+      // La Germania e' piu' competitiva: fasce piu' basse.
+      tiersByMarket: { DE: [{ upTo: null, markupPct: 5, flatFee: 5 }] },
+    }],
+    marketplaces: [
+      { code: "IT", quantity: 8, leadtime: 4, marketplaceId: "APJ6JRA9NG5V4", blacklist: [E3] },
+      { code: "DE", quantity: 6, leadtime: 6, marketplaceId: "A1PA6795UKMFR9", blacklist: [E1] },
+    ],
+    minStock: 0, maxQty: 0, floorMarginPct: 0, zeroKeepDays: 90, minProducts: 1, maxDeltaPct: 100,
+  };
+
+  const it = runConversion(CFG2, { Deldo: CSV2 }, tplIT, { marketplace: "IT", publishedSkus: {}, asinMap: {} });
+  const de = tplDE ? runConversion(CFG2, { Deldo: CSV2 }, tplDE, { marketplace: "DE", publishedSkus: {}, asinMap: {} }) : null;
+
+  t("le fasce per marketplace producono prezzi diversi", () => {
+    const pIT = new Map(it.records.map(r => [r.ean, r.price]));
+    assert.equal(pIT.get(E1), 122, "IT: 100 → 10% + 12");
+    assert.equal(pIT.get(E2), 236, "IT: 200 → 10% + 16");
+    if (!de) return;
+    const pDE = new Map(de.records.map(r => [r.ean, r.price]));
+    assert.equal(pDE.get(E2), 215, "DE: 200 → 5% + 5");
+    assert.equal(pDE.get(E3), 162.5, "DE: 150 → 5% + 5");
+  });
+  t("ogni marketplace applica la SUA blacklist", () => {
+    const skuIT = it.records.map(r => r.ean);
+    assert.ok(!skuIT.includes(E3), "IT non ha rispettato la sua blacklist");
+    assert.ok(skuIT.includes(E1), "IT ha bloccato un EAN della blacklist tedesca");
+    if (!de) return;
+    const skuDE = de.records.map(r => r.ean);
+    assert.ok(!skuDE.includes(E1), "DE non ha rispettato la sua blacklist");
+    assert.ok(skuDE.includes(E3), "DE ha bloccato un EAN della blacklist italiana");
+  });
+  t("il tempo di gestione e' quello del marketplace", () => {
+    const rowsIT = expandRows(it.records, tplIT, { marketplace: "IT", leadtime: settingsFor(CFG2, "IT").leadtime });
+    const colsIT = resolveColumns(tplIT).cols;
+    assert.equal(rowsIT[0][colsIT.leadtime], 4);
+    if (!de) return;
+    const rowsDE = expandRows(de.records, tplDE, { marketplace: "DE", leadtime: settingsFor(CFG2, "DE").leadtime });
+    const colsDE = resolveColumns(tplDE).cols;
+    assert.equal(rowsDE[0][colsDE.leadtime], 6);
+  });
+  t("le righe DE usano il vocabolario tedesco e la colonna prezzo DE", () => {
+    if (!de) { console.log("      (template DE assente, salto)"); return }
+    const cols = resolveColumns(tplDE).cols;
+    const row = expandRows(de.records, tplDE, { marketplace: "DE", leadtime: 6 })[0];
+    assert.equal(row[cols.action], "Erstellen oder Bearbeiten");
+    assert.equal(row[cols.condition], "Neu");
+    assert.equal(row[cols.channel], "Versand durch Händler (Standard)");
+    assert.match(tplDE.headerRows[4][cols.price], /marketplace_id=A1PA6795UKMFR9/);
+  });
+  t("i registri sono indipendenti: quello IT non spegne le offerte DE", () => {
+    if (!de) return;
+    // Su IT c'e' una SKU storica che il fornitore non manda piu': va a zero.
+    const regIT = { "9999999999994": { sku: "9999999999994", price: 50, firstSeen: "2026-01-01", lastSeen: "2026-01-01" } };
+    const itZ = runConversion(CFG2, { Deldo: CSV2 }, tplIT, { marketplace: "IT", publishedSkus: regIT, asinMap: {} });
+    assert.equal(itZ.stats.zeroed, 1, "IT non ha disattivato la SKU storica");
+    assert.ok(itZ.records.some(r => r.ean === "9999999999994" && r.qty === 0));
+    // Lo stesso registro NON deve arrivare a DE: passandogli il suo, vuoto,
+    // la Germania non deve avere nessuna disattivazione.
+    const deZ = runConversion(CFG2, { Deldo: CSV2 }, tplDE, { marketplace: "DE", publishedSkus: {}, asinMap: {} });
+    assert.equal(deZ.stats.zeroed, 0, "DE ha ereditato disattivazioni dal registro italiano");
+  });
+  t("le mappe ASIN sono indipendenti", () => {
+    if (!de) return;
+    const mappaIT = { [E2]: { asin: "B00ITITIT1" } };
+    const a = runConversion(CFG2, { Deldo: CSV2 }, tplIT, { marketplace: "IT", publishedSkus: {}, asinMap: mappaIT });
+    assert.equal(a.records.find(r => r.ean === E2).asin, "B00ITITIT1");
+    assert.equal(a.stats.with_asin, 1);
+    // A DE si passa la sua mappa, vuota: nessuna riga pinnata
+    const b = runConversion(CFG2, { Deldo: CSV2 }, tplDE, { marketplace: "DE", publishedSkus: {}, asinMap: {} });
+    assert.equal(b.stats.with_asin, 0, "DE ha usato la mappa italiana");
+  });
+  t("statistiche etichettate col marketplace giusto", () => {
+    assert.equal(it.stats.marketplace, "IT");
+    if (de) assert.equal(de.stats.marketplace, "DE");
+  });
+}
+
 console.log("\n── vocabolario preso dal template, non indovinato ──");
 t("dal template IT esce esattamente il vocabolario italiano", () => {
   const v = vocabFor(seedTemplate());
@@ -825,7 +937,11 @@ t("lo split della blacklist accetta qualsiasi separatore", () => {
   assert.ok(!/inp\.split\(\/\[\\n,;\\s\]\+\/\)/.test(tab), "usa ancora il vecchio split");
   assert.ok(/inp\.split\(\/\\D\+\/\)/.test(tab), "non spezza su tutti i non-cifra");
   assert.ok(/normalizeEAN\(g\)/.test(tab), "non valida gli EAN prima di inserirli");
-  assert.ok(/new Set\(\[\.\.\.c\.blacklist,\.\.\.nuovi\]\)/.test(tab), "non deduplica in scrittura");
+  // La lista non arriva piu' da c.blacklist ma da mkSettings(c,code): e' per
+  // marketplace. La dedupe in scrittura deve restare comunque.
+  assert.ok(/new Set\(\[\.\.\.lista,\.\.\.nuovi\]\)/.test(tab), "non deduplica in scrittura");
+  assert.ok(/mkSettings\(c,code\)\.blacklist/.test(tab), "non legge la blacklist del marketplace scelto");
+  assert.ok(/salvaLista\(/.test(tab), "non scrive sul marketplace scelto");
   assert.ok(!/e\.length>=8/.test(tab), "accetta ancora qualsiasi token lungo 8+");
 });
 t("la logica di add non duplica: stessa lista due volte", () => {
@@ -879,11 +995,21 @@ t("il banner non e' piu' arancione a prescindere", () => {
     "il banner usa ancora un accent arancione fisso");
   assert.ok(html.includes("prev?.without_asin"), "il banner non legge il valore precedente");
 });
-t("entrambi gli handler scrivono prev nel payload", () => {
+t("la conversione vive in un solo posto e salva prev", () => {
+  // Prima la sequenza era duplicata nei due handler: una correzione applicata a
+  // una sola delle due copie faceva divergere il file notturno da quello
+  // generato a mano. Ora sta in convertRun.mjs e gli handler la chiamano.
+  const run = fs.readFileSync("netlify/functions/_lib/convertRun.mjs", "utf8");
+  assert.ok(/prev: prevSnapshot\(/.test(run), "convertRun non salva prev");
+  assert.ok(/safetyCheck\(stats, previous\?\.stats, mk\)/.test(run),
+    "il guard-rail non confronta con il precedente dello stesso marketplace");
   for (const f of ["netlify/functions/ftp-convert.mjs", "netlify/functions/scheduled-convert.mjs"]) {
     const src = fs.readFileSync(f, "utf8");
-    assert.ok(/prev: prevSnapshot\(/.test(src), f + " non salva prev");
-    assert.ok(/prevSnapshot[,\s]/.test(src.split("stores.mjs")[0]), f + " non importa prevSnapshot");
+    assert.ok(/convertForMarket\(/.test(src), f + " non usa la routine condivisa");
+    assert.ok(!/runConversion\(/.test(src), f + " chiama ancora runConversion direttamente: la logica e' di nuovo duplicata");
+    assert.ok(/fetchAllCSVsFromFTP\(config\.suppliers\)/.test(src), f + " non scarica i CSV");
+    assert.equal((src.match(/fetchAllCSVsFromFTP\(/g) || []).length, 1,
+      f + ": i CSV vanno scaricati una volta sola, non per marketplace");
   }
 });
 

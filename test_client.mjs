@@ -9,6 +9,7 @@ import XLSX from "xlsx";
 import * as babel from "@babel/core";
 import { seedTemplate, vocabFor as srvVocabFor } from "./netlify/functions/_lib/template.mjs";
 import { expandRows, buildTxt } from "./netlify/functions/_lib/converter.mjs";
+import { settingsFor as srvSettingsFor, tiersFor as srvTiersFor } from "./netlify/functions/_lib/marketplace.mjs";
 
 const html = fs.readFileSync("index.html", "utf8");
 const code = html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/)[1];
@@ -17,7 +18,15 @@ const start = code.indexOf("// ─── Formato template Amazon");
 const end = code.indexOf("// ─── Mini bar chart");
 assert.ok(start > 0 && end > start, "blocco helper non individuato");
 const helpers = code.slice(start, end);
-const out = babel.transformSync(helpers + "\nglobalThis.__H={parseTemplateFile,expandRecords,buildTxt,resolveColumns,normalizeEAN:typeof normalizeEAN!=='undefined'?normalizeEAN:null,fmtPrice,vocabFor,vocabFromLists,extractVocabLists};",
+// Blocco dei marketplace (EU_MP, mkSettings, tiersForClient): sta piu' in alto
+// nel file, e serve qui per verificare che il client calcoli le impostazioni
+// effettive con la stessa precedenza del server. Quando divergevano,
+// l'interfaccia mostrava un ricarico e il file usava un altro.
+const mkStart = code.indexOf("const EU_MP=[");
+const mkEnd = code.indexOf("const DEFAULT_TIERS");
+assert.ok(mkStart > 0 && mkEnd > mkStart, "blocco marketplace non individuato");
+const mkBlock = code.slice(mkStart, mkEnd);
+const out = babel.transformSync(mkBlock + helpers + "\nglobalThis.__H={parseTemplateFile,expandRecords,buildTxt,resolveColumns,normalizeEAN:typeof normalizeEAN!=='undefined'?normalizeEAN:null,fmtPrice,vocabFor,vocabFromLists,extractVocabLists,EU_MP,mpInfo,mpCodes,mpPrimary,mkSettings,tiersForClient};",
   { presets: [["@babel/preset-react", { runtime: "classic" }]], configFile: false, babelrc: false }).code;
 globalThis.XLSX = XLSX;
 globalThis.fetch = async () => { throw new Error("no fetch in test"); };
@@ -156,6 +165,56 @@ await ta("il client rifiuta un template senza le liste", async () => {
   let msg = null;
   try { await H.parseTemplateFile(f) } catch (e) { msg = e.message }
   assert.ok(msg && /Dropdown Lists/.test(msg), "non segnala le liste mancanti: " + msg);
+});
+
+// ─── Interfaccia e server devono calcolare le stesse impostazioni ────────────
+// Se divergessero, la pagina mostrerebbe un ricarico o un tempo di gestione e
+// il file ne userebbe un altro: un errore invisibile, che si scopre solo dalle
+// vendite sbagliate.
+console.log("\n── impostazioni per marketplace: client == server ──");
+const CFG_MK = {
+  minStock: 5, leadtime: 3, quantity: 10, onlyMapped: false, blacklist: ["3188649821594"],
+  marketplaces: [
+    { code: "IT", leadtime: 3, quantity: 10 },
+    { code: "DE", leadtime: 6, quantity: 8, minStock: 2, onlyMapped: true, blacklist: ["9999999999994"] },
+    { code: "FR" },
+  ],
+};
+for (const code of ["IT", "DE", "FR"]) {
+  t(`mkSettings(${code}) coincide con settingsFor(${code}) del server`, () => {
+    const cl = H.mkSettings(CFG_MK, code);
+    const sv = srvSettingsFor(CFG_MK, code);
+    for (const f of ["leadtime", "quantity", "minStock", "maxQty", "onlyMapped"])
+      assert.equal(cl[f], sv[f], `${code}.${f}: client ${cl[f]} vs server ${sv[f]}`);
+    assert.deepEqual(cl.blacklist, sv.blacklist, `${code}.blacklist`);
+  });
+}
+t("la blacklist globale resta solo del primario, non si eredita su DE/FR", () => {
+  assert.deepEqual(H.mkSettings(CFG_MK, "IT").blacklist, ["3188649821594"]);
+  assert.deepEqual(H.mkSettings(CFG_MK, "DE").blacklist, ["9999999999994"]);
+  assert.deepEqual(H.mkSettings(CFG_MK, "FR").blacklist, []);
+});
+
+const SUP_MK = {
+  name: "Deldo",
+  tiers: [{ upTo: 50, markupPct: 18, flatFee: 7 }, { upTo: null, markupPct: 12, flatFee: 18 }],
+  tiersByMarket: { DE: [{ upTo: 50, markupPct: 24, flatFee: 9 }, { upTo: null, markupPct: 16, flatFee: 20 }], FR: [] },
+};
+for (const code of ["IT", "DE", "FR"]) {
+  t(`tiersForClient(${code}) coincide con tiersFor(${code}) del server`, () => {
+    assert.deepEqual(H.tiersForClient(SUP_MK, code), srvTiersFor(SUP_MK, code));
+  });
+}
+t("una lista vuota in tiersByMarket non e' una configurazione: si torna a tiers", () => {
+  assert.deepEqual(H.tiersForClient(SUP_MK, "FR"), SUP_MK.tiers);
+});
+t("gli id marketplace di EU_MP coincidono con quelli verificati sui template", () => {
+  const byCode = Object.fromEntries(H.EU_MP.map(m => [m.code, m.id]));
+  assert.equal(byCode.IT, "APJ6JRA9NG5V4");
+  assert.equal(byCode.DE, "A1PA6795UKMFR9");
+  // I marketplace non verificati devono restare null: un id inventato farebbe
+  // rifiutare il template giusto con un messaggio fuorviante.
+  for (const c of ["BE", "PL", "UK"]) assert.equal(byCode[c], null, c + " ha un id non verificato");
 });
 
 console.log(`\n${fail === 0 ? "✅" : "❌"}  ${pass} test passati, ${fail} falliti\n`);

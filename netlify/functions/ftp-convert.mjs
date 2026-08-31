@@ -1,10 +1,14 @@
 /**
  * /api/ftp-convert
  *
- * GET             → ultimo risultato pubblicato + eventuale risultato in quarantena
- * GET ?rows=0     → solo statistiche, senza i record (risposta leggera)
- * POST            → scarica i CSV dall'FTP adesso, converte, applica il guard-rail
- * POST {force:1}  → converte e pubblica anche se il guard-rail blocca
+ * GET                → per ogni marketplace: ultimo risultato pronto + eventuale
+ *                      risultato in quarantena
+ * GET ?rows=0        → solo statistiche, senza i record (risposta leggera)
+ * GET ?mk=DE         → solo quel marketplace
+ * POST               → scarica i CSV dall'FTP adesso e converte per TUTTI i
+ *                      marketplace attivi; i CSV si scaricano una volta sola
+ * POST {marketplace} → converte solo quel marketplace
+ * POST {force:1}     → pubblica anche se il guard-rail blocca
  *
  * Il payload salvato contiene record compatti; il file .xlsx e il .txt li
  * costruisce il browser leggendo il template da /api/template. Cosi' le
@@ -12,33 +16,43 @@
  */
 
 import { fetchAllCSVsFromFTP } from "./_lib/ftp.mjs";
-import { runConversion, safetyCheck } from "./_lib/converter.mjs";
-import { loadTemplate } from "./_lib/template.mjs";
-import { loadAsinMap } from "./_lib/asinmap.mjs";
-import { primaryCode } from "./_lib/marketplace.mjs";
-import {
-  resultStore, RESULT_KEY, PENDING_KEY,
-  loadConfig, loadPublishedSkus, savePublishedSkus,
-  saveHistoryRecord, pushAlerts, historyFrom, json, prevSnapshot,
-} from "./_lib/stores.mjs";
+import { convertForMarket, loadResults } from "./_lib/convertRun.mjs";
+import { activeMarketplaces, findMarketplace, primaryCode } from "./_lib/marketplace.mjs";
+import { loadConfig, pushAlerts, json } from "./_lib/stores.mjs";
 
 export default async (req) => {
-  const store = resultStore();
-
   if (req.method === "GET") {
     try {
-      const withRows = new URL(req.url).searchParams.get("rows") !== "0";
-      const [latest, pending] = await Promise.all([
-        store.get(RESULT_KEY, { type: "json" }),
-        store.get(PENDING_KEY, { type: "json" }),
-      ]);
+      const config = await loadConfig();
+      const url = new URL(req.url);
+      const withRows = url.searchParams.get("rows") !== "0";
+      const solo = url.searchParams.get("mk");
+
+      const codes = (solo ? [String(solo).toUpperCase()] : activeMarketplaces(config).map(m => String(m.code).toUpperCase()));
+      if (!codes.length) return json({ marketplaces: [], primary: null, byMarket: {}, latest: null, pending: null });
+
       const strip = r => {
         if (!r) return null;
         if (withRows) return r;
         const { records, ...rest } = r;
         return { ...rest, rowCount: records?.length ?? 0 };
       };
-      return json({ latest: strip(latest), pending: strip(pending) });
+
+      const byMarket = {};
+      for (const code of codes) {
+        const { latest, pending } = await loadResults(config, code);
+        byMarket[code] = { latest: strip(latest), pending: strip(pending) };
+      }
+      const prim = String(primaryCode(config)).toUpperCase();
+      return json({
+        marketplaces: codes,
+        primary: prim,
+        byMarket,
+        // Compatibilita': un client non aggiornato legge ancora latest/pending
+        // del marketplace primario e continua a funzionare.
+        latest: byMarket[prim]?.latest ?? null,
+        pending: byMarket[prim]?.pending ?? null,
+      });
     } catch (e) {
       return json({ error: e.message }, 500);
     }
@@ -55,60 +69,54 @@ export default async (req) => {
       return json({ error: "Nessuna configurazione trovata. Configura prima i fornitori." }, 400);
     }
 
-    const marketplace = String(body.marketplace || primaryCode(config)).toUpperCase();
-    const template = await loadTemplate(config, marketplace);
-    if (!template) {
-      return json({ error: `Nessun template caricato per il marketplace ${marketplace}. Caricalo dal tab Template.` }, 400);
+    let codes;
+    if (body.marketplace) {
+      const code = String(body.marketplace).toUpperCase();
+      if (!findMarketplace(config, code)) return json({ error: `Marketplace ${code} non configurato.` }, 400);
+      codes = [code];
+    } else {
+      codes = activeMarketplaces(config).map(m => String(m.code).toUpperCase());
     }
+    if (!codes.length) return json({ error: "Nessun marketplace attivo configurato." }, 400);
 
+    // Un solo scarico per tutti i marketplace: gli articoli del fornitore sono
+    // gli stessi, e chiedere due volte lo stesso file all'FTP di Deldo
+    // raddoppierebbe i tempi senza cambiare una riga del risultato.
     const { csvMap, problems } = await fetchAllCSVsFromFTP(config.suppliers);
     if (Object.keys(csvMap).length === 0) {
       return json({ error: "Nessun CSV scaricato dall'FTP. " + (problems.join(" | ") || "Verifica le cartelle in /fornitori.") }, 400);
     }
 
-    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(config, marketplace), loadAsinMap(config, marketplace)]);
-    const { records, stats, publishedSkus: nextPublished } = runConversion(config, csvMap, template, {
-      marketplace,
-      dupMode: body.dupMode || "price",
-      qtyMode: body.qtyMode || config.qtyMode || "catalog",
-      publishedSkus,
-      asinMap,
-    });
-    if (problems.length) stats.errors = [...(stats.errors || []), ...problems];
-
-    const previous = await store.get(RESULT_KEY, { type: "json" });
-    const check = safetyCheck(stats, previous?.stats, config);
-
-    const payload = {
-      records,
-      stats,
-      // Confronto con il file precedente: serve al banner "righe col solo EAN",
-      // che deve allarmare solo se il numero peggiora, non tutti i giorni.
-      prev: prevSnapshot(previous?.stats),
-      filename: `Offerte_${marketplace}_${new Date().toISOString().slice(0, 10)}`,
-      safety: check,
-      source: force ? "manual-forced" : "manual",
-    };
-
-    // Guard-rail: se il risultato e' sospetto non sovrascriviamo l'ultimo buono.
-    if (!check.ok && !force) {
-      // publishedSkus viaggia col payload in quarantena: se poi confermi da
-      // /api/publish, il tracciamento delle SKU resta coerente.
-      await store.setJSON(PENDING_KEY, { ...payload, publishedSkus: nextPublished });
-      await pushAlerts([{
-        type: "warning",
-        title: "⏸️ Conversione messa in quarantena",
-        message: check.blockers.join(" · ") + " — controlla e conferma dal tab Auto.",
-      }]);
-      return json({ ok: false, quarantined: true, safety: check, stats });
+    const results = [];
+    const alerts = [];
+    for (const code of codes) {
+      const r = await convertForMarket({
+        config, code, csvMap, problems, force,
+        source: "manual",
+        dupMode: body.dupMode, qtyMode: body.qtyMode,
+      });
+      results.push(r);
+      if (r.quarantined) {
+        alerts.push({
+          type: "warning",
+          title: `⏸️ ${code}: conversione messa in quarantena`,
+          message: r.safety.blockers.join(" · ") + " — controlla e conferma dal tab Auto.",
+        });
+      } else if (r.error) {
+        alerts.push({ type: "error", title: `❌ ${code}: conversione non riuscita`, message: r.error });
+      }
     }
+    if (alerts.length) await pushAlerts(alerts);
 
-    await store.setJSON(RESULT_KEY, payload);
-    await store.delete(PENDING_KEY).catch(() => {});
-    await savePublishedSkus(nextPublished, config, marketplace);
-    await saveHistoryRecord(historyFrom(stats, payload.source));
-
-    return json({ ok: true, safety: check, stats });
+    const riusciti = results.filter(r => r.ok);
+    return json({
+      ok: riusciti.length > 0,
+      results,
+      quarantined: results.some(r => r.quarantined),
+      // Compatibilita' con un client non aggiornato.
+      safety: results[0]?.safety ?? null,
+      stats: results[0]?.stats ?? null,
+    });
   } catch (e) {
     return json({ error: e.message }, 500);
   }
