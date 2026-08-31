@@ -16,7 +16,8 @@
  * coerenti.
  */
 
-import { asinMapStore, ASINMAP_KEY } from "./stores.mjs";
+import { primaryCode } from "./marketplace.mjs";
+import { asinMapStore, ASINMAP_KEY , getForMarket, setForMarket } from "./stores.mjs";
 
 const ASIN_RE = /^[A-Z0-9]{10}$/;
 
@@ -79,12 +80,21 @@ function parseCsvRows(src) {
   return rows.filter(r => r.some(c => String(c).trim() !== ""));
 }
 
-export async function loadAsinMap() {
-  return (await asinMapStore().get(ASINMAP_KEY, { type: "json" })) || {};
+/**
+ * Mappa EAN→ASIN per marketplace. Gli ASIN esistono su entrambi i cataloghi
+ * europei, ma la verifica e' stata fatta sui titoli italiani: riusarla su DE
+ * senza ricontrollarla rimetterebbe in gioco proprio l'errore che la mappa
+ * serve a evitare. Quindi due mappe, e la copia si fa con un'azione esplicita.
+ */
+export async function loadAsinMap(config, code) {
+  const mk = code || primaryCode(config);
+  const primary = mk === primaryCode(config);
+  return (await getForMarket(asinMapStore(), ASINMAP_KEY, mk, { primary })) || {};
 }
 
-export async function saveAsinMap(map) {
-  await asinMapStore().setJSON(ASINMAP_KEY, map);
+export async function saveAsinMap(map, config, code) {
+  const mk = code || primaryCode(config);
+  await setForMarket(asinMapStore(), ASINMAP_KEY, mk, map);
 }
 
 export function asinMapInfo(map) {

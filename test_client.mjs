@@ -25,7 +25,18 @@ new Function(out)();
 const H = globalThis.__H;
 
 let pass = 0, fail = 0;
-const t = (n, f) => { try { f(); console.log("  ✓ " + n); pass++; } catch (e) { console.log("  ✗ " + n + "\n      " + e.message); fail++; } };
+const t = (n, f) => {
+  try {
+    const r = f();
+    if (r && typeof r.then === "function")
+      throw new Error("test asincrono passato a t(): usa `await ta(...)`");
+    console.log("  ✓ " + n); pass++;
+  } catch (e) { console.log("  ✗ " + n + "\n      " + e.message); fail++; }
+};
+const ta = async (n, f) => {
+  try { await f(); console.log("  ✓ " + n); pass++; }
+  catch (e) { console.log("  ✗ " + n + "\n      " + e.message); fail++; }
+};
 
 const REF = process.env.AMZ_TEMPLATE_REF || "fixtures/template_amazon_riferimento.xlsm";
 if (!fs.existsSync(REF)) {
@@ -77,7 +88,7 @@ t("prezzo col punto su UK", () => assert.equal(H.fmtPrice(171.61, "UK"), "171.61
 
 console.log("\n── rifiuto di file non validi ──");
 const notTemplate = XLSX.write((() => { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["ciao"]]), "Foglio1"); return wb; })(), { bookType: "xlsx", type: "buffer" });
-t("un xlsx qualsiasi viene rifiutato", async () => {
+await ta("un xlsx qualsiasi viene rifiutato", async () => {
   return H.parseTemplateFile({ name: "x.xlsx", arrayBuffer: async () => notTemplate.buffer.slice(notTemplate.byteOffset, notTemplate.byteOffset + notTemplate.byteLength) })
     .then(() => { throw new Error("avrebbe dovuto lanciare"); }, () => {});
 });
@@ -98,7 +109,7 @@ t("client e server derivano lo stesso vocabolario", () => {
   assert.equal(a.origine, "template");
   assert.equal(b.origine, "template");
 });
-t("client e server derivano lo stesso vocabolario dal template DE", async () => {
+await ta("client e server derivano lo stesso vocabolario dal template DE", async () => {
   const REF_DE = "fixtures/template_amazon_de_riferimento.xlsm";
   if (!fs.existsSync(REF_DE)) { console.log("      (template DE assente, salto)"); return }
   const b = fs.readFileSync(REF_DE);
@@ -114,7 +125,7 @@ t("client e server derivano lo stesso vocabolario dal template DE", async () => 
   assert.equal(a.channelMerchant, "Versand durch Händler (Standard)");
   assert.ok(!/amazon/i.test(a.channelMerchant), "il client scriverebbe Logistica di Amazon");
 });
-t("client e server producono righe identiche sul template DE", async () => {
+await ta("client e server producono righe identiche sul template DE", async () => {
   const REF_DE = "fixtures/template_amazon_de_riferimento.xlsm";
   if (!fs.existsSync(REF_DE)) return;
   const b = fs.readFileSync(REF_DE);
@@ -134,7 +145,7 @@ t("client e server producono righe identiche sul template DE", async () => {
   assert.equal(cl[1][cols.extIdType], "EAN");
   assert.equal(typeof cl[0][cols.price], "number");
 });
-t("il client rifiuta un template senza le liste", async () => {
+await ta("il client rifiuta un template senza le liste", async () => {
   // stesso file ma senza il foglio Dropdown Lists: deve fallire con un messaggio
   // chiaro invece di ripiegare in silenzio su stringhe scritte a mano.
   const wb2 = XLSX.read(bytes, { type: "buffer" });

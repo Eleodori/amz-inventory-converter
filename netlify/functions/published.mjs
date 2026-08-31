@@ -14,7 +14,7 @@
  * primo giro utile escono a quantita' 0.
  */
 
-import { json } from "./_lib/stores.mjs";
+import { json, resolveMarketplaceFromRequest, delForMarket } from "./_lib/stores.mjs";
 import { loadPublishedSkus, savePublishedSkus, publishedStore, PUBLISHED_KEY } from "./_lib/stores.mjs";
 
 function parseActiveOffers(text) {
@@ -38,11 +38,16 @@ function parseActiveOffers(text) {
 }
 
 export default async (req) => {
+  const mkr = await resolveMarketplaceFromRequest(req);
+  if (mkr.error) return json({ error: mkr.error }, 400);
+  const { config: cfg, code: mk } = mkr;
+
   if (req.method === "GET") {
     try {
-      const map = await loadPublishedSkus();
+      const map = await loadPublishedSkus(cfg, mk);
       const entries = Object.values(map);
       return json({
+        marketplace: mk,
         info: {
           count: entries.length,
           attive: entries.filter(e => !e.zeroSince).length,
@@ -63,7 +68,7 @@ export default async (req) => {
       if (error) return json({ error }, 400);
       if (!rows.length) return json({ error: "Nessuna SKU trovata nel report" }, 400);
 
-      const map = await loadPublishedSkus();
+      const map = await loadPublishedSkus(cfg, mk);
       const today = new Date().toISOString().slice(0, 10);
       let added = 0, updated = 0;
       for (const { sku, price } of rows) {
@@ -81,9 +86,9 @@ export default async (req) => {
         };
         added++;
       }
-      await savePublishedSkus(map);
+      await savePublishedSkus(map, cfg, mk);
       return json({
-        ok: true,
+        ok: true, marketplace: mk,
         righe_nel_report: rows.length,
         aggiunte_al_registro: added,
         prezzi_completati: updated,
@@ -99,7 +104,8 @@ export default async (req) => {
 
   if (req.method === "DELETE") {
     try {
-      await publishedStore().delete(PUBLISHED_KEY);
+      await delForMarket(publishedStore(), PUBLISHED_KEY, mk);
+      if (mkr.primary) await publishedStore().delete(PUBLISHED_KEY).catch(() => {});
       return json({ ok: true });
     } catch (e) {
       return json({ error: e.message }, 500);

@@ -18,8 +18,9 @@
  * del prezzo contiene il marketplace id, es. APJ6JRA9NG5V4 per Amazon.it).
  */
 
+import { primaryCode } from "./marketplace.mjs";
 import { TEMPLATE_SEED } from "./templateSeed.mjs";
-import { templateStore, TEMPLATE_KEY } from "./stores.mjs";
+import { templateStore, TEMPLATE_KEY , getForMarket, setForMarket } from "./stores.mjs";
 
 /** Colonne che il converter deve saper trovare. */
 export const FIELD_PATTERNS = {
@@ -222,8 +223,24 @@ export function seedTemplate() {
   return { ...TEMPLATE_SEED, isSeed: true };
 }
 
-/** Template in uso: quello caricato dall'utente, altrimenti il default del repo. */
-export async function loadTemplate() {
-  const stored = await templateStore().get(TEMPLATE_KEY, { type: "json" });
-  return stored || seedTemplate();
+/**
+ * Template in uso per un marketplace.
+ *
+ * Il seed incluso nel repo e' italiano: va restituito solo al marketplace
+ * primario. Per la Germania un template mancante deve essere un errore
+ * esplicito, non un template italiano silenzioso — genererebbe un file con
+ * l'id marketplace sbagliato in dieci nomi di colonna.
+ */
+export async function loadTemplate(config, code) {
+  const mk = code || primaryCode(config);
+  const primary = mk === primaryCode(config);
+  const stored = await getForMarket(templateStore(), TEMPLATE_KEY, mk, { primary });
+  if (stored) return stored;
+  if (primary) return seedTemplate();
+  return null;
+}
+
+export async function saveTemplateFor(t, config, code) {
+  const mk = code || primaryCode(config);
+  await setForMarket(templateStore(), TEMPLATE_KEY, mk, t);
 }

@@ -9,6 +9,7 @@
  */
 
 import { resolveColumns, vocabFor } from "./template.mjs";
+import { settingsFor, findMarketplace, primaryCode, tiersFor } from "./marketplace.mjs";
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────
 
@@ -225,24 +226,41 @@ export function buildTxt(template, dataRows, opts = {}) {
  * @param opts      { marketplace, dupMode, qtyMode, publishedSkus }
  */
 export function runConversion(config, csvMap, template, opts = {}) {
-  const marketplace = opts.marketplace || config.marketplaces?.[0]?.code || "IT";
-  const dupMode = opts.dupMode || "price";
-  const qtyMode = opts.qtyMode || "catalog";
+  const marketplace = opts.marketplace || primaryCode(config);
+
+  // Un solo posto decide le impostazioni di questo marketplace: override sul
+  // marketplace, altrimenti valore globale, altrimenti default. Su una config
+  // scritta prima del multi-marketplace nessun override esiste, quindi vincono
+  // i valori globali e i numeri restano identici a prima.
+  const mk = settingsFor(config, marketplace);
+  if (!template) throw new Error(`Nessun template caricato per il marketplace ${marketplace}.`);
+
+  const dupMode = opts.dupMode || mk.dupMode;
+  const qtyMode = opts.qtyMode || mk.qtyMode;
   const published = opts.publishedSkus || {};
   const asinMap = opts.asinMap || {};
-  const onlyMapped = !!config.onlyMapped;
+  const onlyMapped = !!mk.onlyMapped;
 
-  const mp = (config.marketplaces || []).find(m => m.code === marketplace);
-  if (!mp) throw new Error(`Marketplace ${marketplace} non trovato nella configurazione`);
+  const mp = findMarketplace(config, marketplace);
+
+  // Il template deve appartenere al marketplace per cui stiamo generando: dieci
+  // nomi di colonna contengono l'id del marketplace, quindi un template italiano
+  // usato per la Germania produce un file che Amazon.de non riconosce.
+  if (template.marketplaceId && mp?.marketplaceId && template.marketplaceId !== mp.marketplaceId) {
+    throw new Error(
+      `Il template caricato e' del marketplace ${template.marketplaceId}, ma stai generando per ` +
+      `${marketplace} (${mp.marketplaceId}). Carica il template scaricato da Seller Central su ${marketplace}.`
+    );
+  }
 
   const { missing } = resolveColumns(template);
   if (missing.length) throw new Error("Template incompleto, colonne mancanti: " + missing.join(", "));
 
-  const bl = new Set(config.blacklist || []);
+  const bl = new Set(mk.blacklist);
   const supplierPriority = Object.fromEntries((config.suppliers || []).map((s, i) => [s.name, i]));
-  const minStock = Number(config.minStock ?? 0);
-  const floorMarginPct = Number(config.floorMarginPct ?? 0);
-  const maxQty = Number(config.maxQty ?? 0);
+  const minStock = Number(mk.minStock);
+  const floorMarginPct = Number(mk.floorMarginPct);
+  const maxQty = Number(mk.maxQty);
 
   const em = {};
   let totalRead = 0, skipped = 0, badEan = 0, dup = 0, blocked = 0, belowMinStock = 0, unmappedSkipped = 0;
@@ -255,6 +273,8 @@ export function runConversion(config, csvMap, template, opts = {}) {
 
     const { headers, rows } = parseCSV(csvText, sup.delimiter || ";");
     if (!headers.length) { errors.push(`${sup.name}: CSV vuoto o illeggibile`); continue; }
+
+    const tiers = tiersFor(sup, marketplace);
 
     const skC = fCol(headers, sup.skuCol);
     const enC = fCol(headers, sup.eanCol);
@@ -287,10 +307,13 @@ export function runConversion(config, csvMap, template, opts = {}) {
       // articoli quasi esauriti che nasce la maggior parte degli annullamenti.
       if (stock !== null && minStock > 0 && stock < minStock) { belowMinStock++; continue; }
 
-      const finalPrice = applyTiers(rp, sup.tiers || []);
+      // Fasce di rincaro del marketplace: il mercato tedesco e' piu' competitivo
+      // sugli pneumatici, quindi le fasce possono essere diverse da quelle IT.
+      // Senza tiersByMarket restano quelle del fornitore, cioe' le storiche.
+      const finalPrice = applyTiers(rp, tiers);
       const candidate = {
         sku, ean, price: finalPrice, supplier: sup.name, stock,
-        tierKey: tierKeyFor(rp, sup.tiers || []), costPrice: rp,
+        tierKey: tierKeyFor(rp, tiers), costPrice: rp,
       };
 
       if (em[ean]) { dup++; em[ean] = resolveDuplicate(em[ean], candidate, dupMode, supplierPriority); }
@@ -327,7 +350,7 @@ export function runConversion(config, csvMap, template, opts = {}) {
   // ─── Disattivazione delle SKU non piu' fornite ──────────────────────────────
   const todayIso = new Date().toISOString();
   const today = todayIso.slice(0, 10);
-  const zeroKeepDays = Number(config.zeroKeepDays ?? 90);
+  const zeroKeepDays = Number(mk.zeroKeepDays);
   const nextPublished = {};
   let zeroed = 0, dropped = 0;
 

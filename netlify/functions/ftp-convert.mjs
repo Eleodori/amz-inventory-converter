@@ -15,6 +15,7 @@ import { fetchAllCSVsFromFTP } from "./_lib/ftp.mjs";
 import { runConversion, safetyCheck } from "./_lib/converter.mjs";
 import { loadTemplate } from "./_lib/template.mjs";
 import { loadAsinMap } from "./_lib/asinmap.mjs";
+import { primaryCode } from "./_lib/marketplace.mjs";
 import {
   resultStore, RESULT_KEY, PENDING_KEY,
   loadConfig, loadPublishedSkus, savePublishedSkus,
@@ -54,15 +55,18 @@ export default async (req) => {
       return json({ error: "Nessuna configurazione trovata. Configura prima i fornitori." }, 400);
     }
 
-    const template = await loadTemplate();
-    const marketplace = body.marketplace || config.marketplaces?.[0]?.code || "IT";
+    const marketplace = String(body.marketplace || primaryCode(config)).toUpperCase();
+    const template = await loadTemplate(config, marketplace);
+    if (!template) {
+      return json({ error: `Nessun template caricato per il marketplace ${marketplace}. Caricalo dal tab Template.` }, 400);
+    }
 
     const { csvMap, problems } = await fetchAllCSVsFromFTP(config.suppliers);
     if (Object.keys(csvMap).length === 0) {
       return json({ error: "Nessun CSV scaricato dall'FTP. " + (problems.join(" | ") || "Verifica le cartelle in /fornitori.") }, 400);
     }
 
-    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(), loadAsinMap()]);
+    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(config, marketplace), loadAsinMap(config, marketplace)]);
     const { records, stats, publishedSkus: nextPublished } = runConversion(config, csvMap, template, {
       marketplace,
       dupMode: body.dupMode || "price",
@@ -101,7 +105,7 @@ export default async (req) => {
 
     await store.setJSON(RESULT_KEY, payload);
     await store.delete(PENDING_KEY).catch(() => {});
-    await savePublishedSkus(nextPublished);
+    await savePublishedSkus(nextPublished, config, marketplace);
     await saveHistoryRecord(historyFrom(stats, payload.source));
 
     return json({ ok: true, safety: check, stats });

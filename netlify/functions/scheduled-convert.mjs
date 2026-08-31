@@ -16,6 +16,7 @@ import { fetchAllCSVsFromFTP } from "./_lib/ftp.mjs";
 import { runConversion, safetyCheck, buildAlerts } from "./_lib/converter.mjs";
 import { loadTemplate } from "./_lib/template.mjs";
 import { loadAsinMap } from "./_lib/asinmap.mjs";
+import { primaryCode } from "./_lib/marketplace.mjs";
 import {
   resultStore, RESULT_KEY, PENDING_KEY,
   loadConfig, loadPublishedSkus, savePublishedSkus,
@@ -34,13 +35,20 @@ export default async () => {
       return;
     }
 
-    const template = await loadTemplate();
+    const marketplace = String(primaryCode(config)).toUpperCase();
+    const template = await loadTemplate(config, marketplace);
+    if (!template) {
+      await pushAlerts([{
+        type: "error", title: "❌ Template mancante",
+        message: `Nessun template caricato per il marketplace ${marketplace}: non posso generare il file.`,
+      }]);
+      return;
+    }
     if (template.isSeed) {
       console.log("Uso il template di default incluso nel repo (nessun template caricato dall'utente).");
     }
 
     const store = resultStore();
-    const marketplace = config.marketplaces?.[0]?.code || "IT";
     const previous = await store.get(RESULT_KEY, { type: "json" });
     const previousStats = previous?.stats || null;
 
@@ -57,7 +65,7 @@ export default async () => {
       return;
     }
 
-    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(), loadAsinMap()]);
+    const [publishedSkus, asinMap] = await Promise.all([loadPublishedSkus(config, marketplace), loadAsinMap(config, marketplace)]);
     console.log("⚙️ Conversione in corso...");
     const { records, stats, publishedSkus: nextPublished } = runConversion(config, csvMap, template, {
       marketplace,
@@ -95,7 +103,7 @@ export default async () => {
 
     await store.setJSON(RESULT_KEY, payload);
     await store.delete(PENDING_KEY).catch(() => {});
-    await savePublishedSkus(nextPublished);
+    await savePublishedSkus(nextPublished, config, marketplace);
     await saveHistoryRecord(historyFrom(stats, "scheduled"));
 
     const alerts = buildAlerts(stats, previousStats, config.alertThresholds);

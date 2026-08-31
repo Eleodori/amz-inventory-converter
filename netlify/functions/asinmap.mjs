@@ -9,16 +9,20 @@
  * DELETE             → svuota la mappa (si torna all'abbinamento fatto da Amazon)
  */
 
-import { asinMapStore, ASINMAP_KEY, json } from "./_lib/stores.mjs";
+import { asinMapStore, ASINMAP_KEY, json, resolveMarketplaceFromRequest, delForMarket } from "./_lib/stores.mjs";
 import { parseAsinMapCsv, loadAsinMap, saveAsinMap, asinMapInfo } from "./_lib/asinmap.mjs";
 
 export default async (req) => {
+  const mkr = await resolveMarketplaceFromRequest(req);
+  if (mkr.error) return json({ error: mkr.error }, 400);
+  const { config: cfg, code: mk } = mkr;
+
   if (req.method === "GET") {
     try {
-      const map = await loadAsinMap();
+      const map = await loadAsinMap(cfg, mk);
       const url = new URL(req.url);
-      if (url.searchParams.get("full") === "1") return json({ info: asinMapInfo(map), map });
-      return json({ info: asinMapInfo(map) });
+      if (url.searchParams.get("full") === "1") return json({ marketplace: mk, info: asinMapInfo(map), map });
+      return json({ marketplace: mk, info: asinMapInfo(map) });
     } catch (e) {
       return json({ error: e.message }, 500);
     }
@@ -36,17 +40,17 @@ export default async (req) => {
       const added = Object.keys(incoming).length;
       if (!added) return json({ error: `Nessuna coppia EAN/ASIN valida trovata (${skipped} righe scartate)` }, 400);
 
-      const current = replace ? {} : await loadAsinMap();
+      const current = replace ? {} : await loadAsinMap(cfg, mk);
       const before = Object.keys(current).length;
       let changed = 0;
       for (const [ean, v] of Object.entries(incoming)) {
         if (current[ean]?.asin && current[ean].asin !== v.asin) changed++;
         current[ean] = v;
       }
-      await saveAsinMap(current);
+      await saveAsinMap(current, cfg, mk);
 
       return json({
-        ok: true,
+        ok: true, marketplace: mk,
         info: asinMapInfo(current),
         caricate: added,
         righe_scartate: skipped,
@@ -61,8 +65,9 @@ export default async (req) => {
 
   if (req.method === "DELETE") {
     try {
-      await asinMapStore().delete(ASINMAP_KEY);
-      return json({ ok: true, info: asinMapInfo({}) });
+      await delForMarket(asinMapStore(), ASINMAP_KEY, mk);
+      if (mkr.primary) await asinMapStore().delete(ASINMAP_KEY).catch(() => {});
+      return json({ ok: true, marketplace: mk, info: asinMapInfo({}) });
     } catch (e) {
       return json({ error: e.message }, 500);
     }

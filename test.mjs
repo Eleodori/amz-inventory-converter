@@ -9,11 +9,26 @@ import XLSX from "xlsx";
 import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
 import { seedTemplate, resolveColumns, vocabFor, vocabFromLists, extractVocabLists } from "./netlify/functions/_lib/template.mjs";
 import { parseAsinMapCsv, asinMapInfo } from "./netlify/functions/_lib/asinmap.mjs";
+import { keyFor, primaryCode, activeMarketplaces, findMarketplace, settingsFor, tiersFor, migrateConfig, marketplaceSummary, MK_DEFAULTS } from "./netlify/functions/_lib/marketplace.mjs";
+import { getForMarket, setForMarket } from "./netlify/functions/_lib/stores.mjs";
 import { prevSnapshot } from "./netlify/functions/_lib/stores.mjs";
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
-  try { fn(); console.log("  ✓ " + name); pass++; }
+  try {
+    const r = fn();
+    if (r && typeof r.then === "function")
+      throw new Error("test asincrono passato a t(): usa `await ta(...)`, altrimenti un fallimento passa come riuscito");
+    console.log("  ✓ " + name); pass++;
+  } catch (e) { console.log("  ✗ " + name + "\n      " + e.message); fail++; }
+};
+/**
+ * Variante per i test asincroni. t() non aspettava la promise: un test async che
+ * lanciava un errore veniva contato come riuscito, perche' il rigetto arrivava
+ * dopo che t() aveva gia' stampato la spunta. Va usata con await.
+ */
+const ta = async (name, fn) => {
+  try { await fn(); console.log("  ✓ " + name); pass++; }
   catch (e) { console.log("  ✗ " + name + "\n      " + e.message); fail++; }
 };
 
@@ -353,11 +368,17 @@ console.log("\n── audit dai risultati della ricerca prodotti ──");
     'ean,asin,marca,misura,titolo_amazon\n"9999999999994","B0OLDOLD01","PIRELLI","205/55/16","vecchia coppia"\n');
 
   const { execFileSync } = await import("node:child_process");
+  const path = await import("node:path");
+  // audit_asin.mjs scrive in "report/" della CWD. Eseguendolo nella cartella del
+  // repo il test sovrascriveva report/mappa_ean_asin_verificata.csv, cioe' un
+  // file di dati reale, con l'output sintetico. Si esegue in una cartella isolata.
+  const SCRIPT = path.resolve("audit_asin.mjs");
+  const CWD = "/tmp/audit-test";
   let out = "";
   try {
     out = execFileSync(process.execPath,
-      ["audit_asin.mjs", "/tmp/audit-test/prefilled.xlsx", "/tmp/audit-test/deldo.csv", "/tmp/audit-test/mappa.csv"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      [SCRIPT, "/tmp/audit-test/prefilled.xlsx", "/tmp/audit-test/deldo.csv", "/tmp/audit-test/mappa.csv"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], cwd: CWD });
   } catch (e) { out = (e.stdout || "") + (e.stderr || "") }
 
   t("riconosce la sorgente e conta le coppie da verificare", () => {
@@ -367,25 +388,269 @@ console.log("\n── audit dai risultati della ricerca prodotti ──");
     assert.match(out, /senza ASIN restituito da Amazon: 1/);
   });
   t("la coppia coerente entra in mappa, quella con la misura sbagliata no", () => {
-    const m = fs.readFileSync("report/mappa_ean_asin_verificata.csv", "utf8");
+    const m = fs.readFileSync(CWD + "/report/mappa_ean_asin_verificata.csv", "utf8");
     assert.ok(m.includes("B00DMCD2NU"), "la coppia coerente manca");
     assert.ok(!m.includes("B0BRSWN92Z"), "la coppia con la misura sbagliata e' entrata");
   });
   t("la mappa esistente non viene persa", () => {
-    const m = fs.readFileSync("report/mappa_ean_asin_verificata.csv", "utf8");
+    const m = fs.readFileSync(CWD + "/report/mappa_ean_asin_verificata.csv", "utf8");
     assert.ok(m.includes("B0OLDOLD01"), "le coppie preesistenti sono state buttate");
     assert.match(out, /1 esistenti \+ 1 verificate adesso/);
+  });
+  t("il test non tocca report/ del repo", () => {
+    // Regressione: la prima versione di questo test eseguiva lo script nella
+    // cartella del repo e sovrascriveva report/mappa_ean_asin_verificata.csv.
+    const src = fs.readFileSync("test.mjs", "utf8");
+    assert.ok(/cwd: CWD/.test(src), "lo script viene eseguito senza cwd isolata");
+    assert.ok(!/readFileSync\("report\//.test(src), "il test legge ancora da report/ del repo");
   });
   t("il file di testo tab-delimited resta la sorgente di default", () => {
     // nessun .xlsx nel nome → percorso report offerte attive
     let err = "";
     try {
-      execFileSync(process.execPath, ["audit_asin.mjs", "/tmp/audit-test/deldo.csv", "/tmp/audit-test/deldo.csv"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync(process.execPath, [SCRIPT, "/tmp/audit-test/deldo.csv", "/tmp/audit-test/deldo.csv"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], cwd: CWD });
     } catch (e) { err = (e.stdout || "") + (e.stderr || "") }
     assert.ok(!/ricerca prodotti/.test(err), "ha usato il parser sbagliato");
   });
 }
+
+console.log("\n── handler: nessuna variabile usata prima di essere dichiarata ──");
+// Scrivendo il supporto multi-marketplace ho spostato loadTemplate(config, marketplace)
+// SOPRA la riga che dichiara `marketplace`: un ReferenceError che avrebbe fermato
+// il job del mattino. I test non eseguono gli handler (servirebbero i blob di
+// Netlify), quindi il controllo e' statico — ma fatto col parser, non con le
+// espressioni regolari: la prima versione segnalava le parole nei commenti.
+{
+  const acorn = await import("acorn");
+  const FUNZIONI = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+
+  /**
+   * Un identificatore usato prima della sua dichiarazione const/let nello stesso
+   * scope, o in uno scope racchiuso senza attraversare un confine di funzione.
+   *
+   * La prima versione raccoglieva le dichiarazioni solo dal corpo diretto della
+   * funzione, e negli handler tutto il codice sta dentro un try: le dichiarazioni
+   * non venivano viste e il controllo passava anche sul codice rotto. Serve una
+   * pila di scope, con i blocchi che contano come scope.
+   */
+  function controlla(src) {
+    const ast = acorn.parse(src, { ecmaVersion: 2023, sourceType: "module" });
+    const problemi = [];
+
+    const dichiarazioniDi = corpo => {
+      const m = new Map();
+      for (const st of corpo || []) {
+        if (st.type === "VariableDeclaration" && st.kind !== "var") {
+          for (const d of st.declarations)
+            if (d.id?.type === "Identifier" && !m.has(d.id.name)) m.set(d.id.name, d.id.start);
+        }
+      }
+      return m;
+    };
+
+    // pila: [{ dich: Map, funzione: bool }] dall'esterno verso l'interno
+    (function vai(n, pila, salta) {
+      if (!n || typeof n !== "object") return;
+      if (Array.isArray(n)) { n.forEach(x => vai(x, pila, salta)); return }
+      if (!n.type) return;
+
+      if (n.type === "Identifier") {
+        if (salta) return;
+        for (let i = pila.length - 1; i >= 0; i--) {
+          const pos = pila[i].dich.get(n.name);
+          if (pos !== undefined) {
+            if (n.start < pos) {
+              const r = k => src.slice(0, k).split("\n").length;
+              problemi.push(`"${n.name}" usata alla riga ${r(n.start)}, dichiarata alla riga ${r(pos)}`);
+            }
+            return;                       // trovata la dichiarazione piu' vicina
+          }
+          if (pila[i].funzione) return;   // oltre il confine di funzione e' una chiusura: legittimo
+        }
+        return;
+      }
+
+      // nuovo scope: corpo di funzione, blocco, Program
+      if (n.type === "Program") { vai(n.body, [...pila, { dich: dichiarazioniDi(n.body), funzione: true }], false); return }
+      if (n.type === "BlockStatement") { vai(n.body, [...pila, { dich: dichiarazioniDi(n.body), funzione: false }], false); return }
+      if (FUNZIONI.has(n.type)) {
+        const corpo = n.body?.type === "BlockStatement" ? n.body.body : null;
+        const nuova = [...pila, { dich: corpo ? dichiarazioniDi(corpo) : new Map(), funzione: true }];
+        vai(n.params, nuova, true);       // i parametri non sono usi
+        if (corpo) vai(corpo, nuova, false); else vai(n.body, nuova, false);
+        return;
+      }
+
+      // posizioni che non sono usi di variabile
+      if (n.type === "MemberExpression") { vai(n.object, pila, salta); if (n.computed) vai(n.property, pila, salta); return }
+      if (n.type === "Property") { if (n.computed) vai(n.key, pila, salta); vai(n.value, pila, salta); return }
+      if (n.type === "VariableDeclarator") { vai(n.init, pila, salta); return }   // l'id non e' un uso
+      if (n.type === "ImportDeclaration" || n.type === "ExportSpecifier" || n.type === "ImportSpecifier") return;
+      if (n.type === "LabeledStatement" || n.type === "BreakStatement" || n.type === "ContinueStatement") return;
+
+      for (const k of Object.keys(n)) if (k !== "type" && k !== "start" && k !== "end") vai(n[k], pila, salta);
+    })(ast, [], false);
+
+    return problemi;
+  }
+
+  // controprova: il codice rotto deve essere segnalato
+  t("il controllo riconosce l'errore che avevo fatto", () => {
+    const rotto = `export default async (req) => {
+      const t = await carica(config, marketplace);
+      const marketplace = "IT";
+    };`;
+    const p = controlla(rotto);
+    assert.ok(p.some(x => /"marketplace" usata alla riga 2/.test(x)), "non l'ha visto: " + JSON.stringify(p));
+  });
+  t("il controllo non segnala una chiusura che usa una variabile dichiarata dopo", () => {
+    const ok = `const f = () => tardi; const tardi = 1; export default f;`;
+    assert.deepEqual(controlla(ok), []);
+  });
+
+  for (const f of fs.readdirSync("netlify/functions").filter(x => x.endsWith(".mjs"))
+       .map(x => "netlify/functions/" + x)
+       .concat(fs.readdirSync("netlify/functions/_lib").filter(x => x.endsWith(".mjs")).map(x => "netlify/functions/_lib/" + x))) {
+    t("uso prima della dichiarazione: " + f.split("/").pop(), () => {
+      const p = controlla(fs.readFileSync(f, "utf8"));
+      assert.deepEqual(p, [], p.join(" · "));
+    });
+  }
+}
+
+console.log("\n── impostazioni per marketplace ──");
+// La configurazione "storica": un solo marketplace, tutto ai livelli globali.
+const CFG_VECCHIA = {
+  suppliers: [{ name: "Deldo", tiers: [{ upTo: 120, markupPct: 10, flatFee: 12 }, { upTo: null, markupPct: 10, flatFee: 16 }] }],
+  marketplaces: [{ code: "IT", quantity: 8, leadtime: 4 }],
+  blacklist: ["1111111111116"],
+  minStock: 5, maxQty: 0, floorMarginPct: 0, zeroKeepDays: 90, onlyMapped: false,
+};
+t("config storica: le impostazioni risolte sono quelle globali", () => {
+  const s = settingsFor(CFG_VECCHIA, "IT");
+  assert.equal(s.minStock, 5);
+  assert.equal(s.leadtime, 4);
+  assert.equal(s.zeroKeepDays, 90);
+  assert.equal(s.onlyMapped, false);
+  assert.deepEqual(s.blacklist, ["1111111111116"], "il primario non eredita la blacklist storica");
+});
+t("l'override sul marketplace vince sul globale", () => {
+  const cfg = { ...CFG_VECCHIA, marketplaces: [{ code: "IT", leadtime: 4 }, { code: "DE", leadtime: 6, minStock: 10, onlyMapped: true }] };
+  const it = settingsFor(cfg, "DE");
+  assert.equal(it.leadtime, 6);
+  assert.equal(it.minStock, 10, "non ha preso l'override");
+  assert.equal(it.onlyMapped, true);
+  assert.equal(settingsFor(cfg, "IT").minStock, 5, "IT ha perso il valore globale");
+});
+t("default quando ne' marketplace ne' config fissano il valore", () => {
+  const s = settingsFor({ marketplaces: [{ code: "IT" }] }, "IT");
+  assert.equal(s.minStock, MK_DEFAULTS.minStock);
+  assert.equal(s.zeroKeepDays, MK_DEFAULTS.zeroKeepDays);
+});
+t("BLACKLIST: assente eredita, vuota resta vuota, DE non eredita mai", () => {
+  const cfg = { blacklist: ["1111111111116"], marketplaces: [{ code: "IT" }, { code: "DE" }] };
+  assert.deepEqual(settingsFor(cfg, "IT").blacklist, ["1111111111116"], "il primario deve ereditare");
+  assert.deepEqual(settingsFor(cfg, "DE").blacklist, [], "DE ha ereditato la blacklist italiana");
+  const svuotata = { blacklist: ["1111111111116"], marketplaces: [{ code: "IT", blacklist: [] }] };
+  assert.deepEqual(settingsFor(svuotata, "IT").blacklist, [],
+    "una blacklist svuotata a mano e' stata resuscitata dal campo storico");
+});
+t("marketplace sconosciuto: errore esplicito", () => {
+  assert.throws(() => settingsFor(CFG_VECCHIA, "FR"), /FR non trovato/);
+});
+t("chiavi dei blob per marketplace", () => {
+  assert.equal(keyFor("skus", "DE"), "skus-DE");
+  assert.equal(keyFor("current", "it"), "current-IT", "il codice va normalizzato in maiuscolo");
+  assert.throws(() => keyFor("skus", ""), /codice marketplace mancante/);
+});
+t("primario e marketplace attivi", () => {
+  const cfg = { marketplaces: [{ code: "IT" }, { code: "DE", enabled: false }, { code: "FR" }] };
+  assert.equal(primaryCode(cfg), "IT");
+  assert.deepEqual(activeMarketplaces(cfg).map(m => m.code), ["IT", "FR"], "enabled:false deve escludere");
+  assert.equal(findMarketplace(cfg, "de").code, "DE", "la ricerca deve ignorare il caso");
+});
+t("fasce per marketplace: tiersByMarket vince, altrimenti quelle del fornitore", () => {
+  const sup = { name: "Deldo", tiers: [{ upTo: null, markupPct: 10, flatFee: 16 }],
+                tiersByMarket: { DE: [{ upTo: null, markupPct: 6, flatFee: 8 }] } };
+  assert.equal(tiersFor(sup, "DE")[0].flatFee, 8);
+  assert.equal(tiersFor(sup, "IT")[0].flatFee, 16, "IT deve usare le fasce storiche");
+  assert.equal(tiersFor({ ...sup, tiersByMarket: { DE: [] } }, "DE")[0].flatFee, 16,
+    "una lista vuota non e' una configurazione: si torna alle fasce del fornitore");
+});
+t("migrateConfig sposta la blacklist sul primario ed e' idempotente", () => {
+  const a = migrateConfig({ blacklist: ["1111111111116"], marketplaces: [{ code: "IT" }, { code: "DE" }] });
+  assert.deepEqual(a.marketplaces[0].blacklist, ["1111111111116"]);
+  assert.deepEqual(a.marketplaces[1].blacklist, []);
+  const b = migrateConfig(a);
+  assert.deepEqual(b.marketplaces[0].blacklist, a.marketplaces[0].blacklist);
+  // una lista svuotata a mano non deve tornare indietro passando dalla migrazione
+  const c = migrateConfig({ blacklist: ["1111111111116"], marketplaces: [{ code: "IT", blacklist: [] }] });
+  assert.deepEqual(c.marketplaces[0].blacklist, []);
+  assert.deepEqual(c.blacklist, [], "il campo storico deve seguire il primario");
+});
+t("migrateConfig regge input degeneri", () => {
+  assert.equal(migrateConfig(null), null);
+  assert.deepEqual(migrateConfig({ marketplaces: [] }).marketplaces, []);
+});
+
+console.log("\n── ricaduta sulle chiavi storiche ──");
+// Store finto: getForMarket deve ricadere sulla chiave senza suffisso SOLO per
+// il marketplace primario. Per la Germania una chiave mancante significa
+// "non configurato", non "usa i dati italiani".
+function storeFinto(contenuto) {
+  return {
+    dati: { ...contenuto },
+    async get(k) { return k in this.dati ? this.dati[k] : null },
+    async setJSON(k, v) { this.dati[k] = v },
+    async delete(k) { delete this.dati[k] },
+  };
+}
+await ta("primario: la chiave nuova manca → legge quella storica", async () => {
+  const st = storeFinto({ skus: { A: 1 } });
+  assert.deepEqual(await getForMarket(st, "skus", "IT", { primary: true }), { A: 1 });
+});
+await ta("primario: la chiave nuova esiste → vince quella nuova", async () => {
+  const st = storeFinto({ skus: { A: 1 }, "skus-IT": { B: 2 } });
+  assert.deepEqual(await getForMarket(st, "skus", "IT", { primary: true }), { B: 2 });
+});
+await ta("NON primario: mai la chiave storica", async () => {
+  const st = storeFinto({ skus: { A: 1 } });
+  assert.equal(await getForMarket(st, "skus", "DE", { primary: false }), null,
+    "DE ha letto il registro italiano: i due cataloghi si incrocerebbero");
+});
+await ta("la scrittura va sempre sulla chiave del marketplace", async () => {
+  const st = storeFinto({ skus: { A: 1 } });
+  await setForMarket(st, "skus", "IT", { C: 3 });
+  assert.deepEqual(st.dati["skus-IT"], { C: 3 });
+  assert.deepEqual(st.dati["skus"], { A: 1 }, "la chiave storica non va toccata: e' la copia di sicurezza");
+});
+await ta("una voce nulla non blocca la ricaduta", async () => {
+  const st = storeFinto({ skus: { A: 1 }, "skus-IT": null });
+  assert.deepEqual(await getForMarket(st, "skus", "IT", { primary: true }), { A: 1 });
+});
+
+console.log("\n── il template deve appartenere al marketplace ──");
+t("template di un altro marketplace: la generazione si ferma", () => {
+  const tpl = { ...seedTemplate(), marketplaceId: "APJ6JRA9NG5V4" };
+  const cfg = { ...CFG_VECCHIA, marketplaces: [{ code: "IT", marketplaceId: "APJ6JRA9NG5V4" }, { code: "DE", marketplaceId: "A1PA6795UKMFR9" }] };
+  assert.throws(() => runConversion(cfg, { Deldo: "" }, tpl, { marketplace: "DE" }),
+    /del marketplace APJ6JRA9NG5V4, ma stai generando per DE/);
+  // sullo stesso marketplace non deve lamentarsi
+  assert.doesNotThrow(() => runConversion(cfg, { Deldo: "" }, tpl, { marketplace: "IT" }));
+});
+t("template assente: errore chiaro invece di un file sbagliato", () => {
+  assert.throws(() => runConversion(CFG_VECCHIA, { Deldo: "" }, null, { marketplace: "IT" }),
+    /Nessun template caricato per il marketplace IT/);
+});
+t("riepilogo per marketplace", () => {
+  const cfg = { ...CFG_VECCHIA, marketplaces: [{ code: "IT" }, { code: "DE", minStock: 10, enabled: false }] };
+  const r = marketplaceSummary(cfg);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].code, "IT"); assert.equal(r[0].enabled, true); assert.equal(r[0].blacklist, 1);
+  assert.equal(r[1].code, "DE"); assert.equal(r[1].enabled, false); assert.equal(r[1].minStock, 10);
+  assert.equal(r[1].blacklist, 0);
+});
 
 console.log("\n── vocabolario preso dal template, non indovinato ──");
 t("dal template IT esce esattamente il vocabolario italiano", () => {

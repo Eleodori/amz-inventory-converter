@@ -1,4 +1,5 @@
 import { getStore } from "@netlify/blobs";
+import { keyFor, primaryCode, migrateConfig, findMarketplace } from "./marketplace.mjs";
 
 const S = name => getStore({ name, consistency: "strong" });
 
@@ -11,24 +12,61 @@ export const asinMapStore   = () => S("amz-asinmap");
 export const publishedStore = () => S("amz-published");
 
 export const CONFIG_KEY    = "app-config";
+
+// Chiavi storiche, di quando esisteva un solo marketplace. Restano leggibili:
+// finche' non si scrive per la prima volta sulla chiave nuova, la lettura per il
+// marketplace primario ricade su queste. Cosi' il passaggio al multi-marketplace
+// non perde niente e non richiede uno script di migrazione.
 export const RESULT_KEY    = "latest";
 export const PENDING_KEY   = "pending";
 export const TEMPLATE_KEY  = "current";
 export const ASINMAP_KEY   = "map";
 export const PUBLISHED_KEY = "skus";
 
+/**
+ * Lettura per marketplace con ricaduta sulla chiave storica.
+ * La ricaduta vale SOLO per il marketplace primario: per la Germania una chiave
+ * mancante significa "non configurato", non "usa i dati italiani".
+ */
+export async function getForMarket(store, base, code, { primary = false } = {}) {
+  const v = await store.get(keyFor(base, code), { type: "json" });
+  if (v !== null && v !== undefined) return v;
+  if (!primary) return null;
+  return await store.get(base, { type: "json" });
+}
+
+export async function setForMarket(store, base, code, value) {
+  await store.setJSON(keyFor(base, code), value);
+}
+
+export async function delForMarket(store, base, code) {
+  await store.delete(keyFor(base, code)).catch(() => {});
+}
+
 export const HISTORY_MAX = 180;
 
 export async function loadConfig() {
-  return await configStore().get(CONFIG_KEY, { type: "json" });
+  const raw = await configStore().get(CONFIG_KEY, { type: "json" });
+  return raw ? migrateConfig(raw) : raw;
 }
 
-export async function loadPublishedSkus() {
-  return (await publishedStore().get(PUBLISHED_KEY, { type: "json" })) || {};
+/**
+ * Registro delle SKU pubblicate, per marketplace.
+ *
+ * E' il pezzo che va tenuto separato con piu' cura: il registro decide chi esce
+ * con quantita' 0. Condividendolo fra IT e DE, un EAN venduto su un solo
+ * marketplace risulterebbe "non piu' fornito" sull'altro e si spegnerebbe da
+ * solo, oppure resterebbe acquistabile per sempre. Due cataloghi, due registri.
+ */
+export async function loadPublishedSkus(config, code) {
+  const mk = code || primaryCode(config);
+  const primary = mk === primaryCode(config);
+  return (await getForMarket(publishedStore(), PUBLISHED_KEY, mk, { primary })) || {};
 }
 
-export async function savePublishedSkus(map) {
-  await publishedStore().setJSON(PUBLISHED_KEY, map);
+export async function savePublishedSkus(map, config, code) {
+  const mk = code || primaryCode(config);
+  await setForMarket(publishedStore(), PUBLISHED_KEY, mk, map);
 }
 
 /**
@@ -89,6 +127,24 @@ export function prevSnapshot(stats) {
     total_products: stats.total_products ?? null,
     created_at: stats.created_at ?? null,
   };
+}
+
+/**
+ * Marketplace richiesto da una chiamata HTTP: ?mk=IT / ?mk=DE, altrimenti il
+ * primario. Sta qui e non nei singoli handler perche' se ognuno risolvesse a
+ * modo suo prima o poi due endpoint leggerebbero e scriverebbero chiavi diverse.
+ */
+export async function resolveMarketplaceFromRequest(req) {
+  const cfg = await loadConfig();
+  const asked = new URL(req.url).searchParams.get("mk");
+  const code = String(asked || primaryCode(cfg)).toUpperCase();
+  if (cfg?.marketplaces?.length && !findMarketplace(cfg, code)) {
+    return {
+      error: `Marketplace ${code} non configurato. Configurati: ` +
+        (cfg.marketplaces.map(m => m.code).join(", ") || "nessuno"),
+    };
+  }
+  return { config: cfg, code, primary: code === String(primaryCode(cfg)).toUpperCase() };
 }
 
 export function json(body, status = 200) {
