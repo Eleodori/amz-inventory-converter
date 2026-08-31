@@ -1678,6 +1678,10 @@ function AsinTab({config:c,save,mk,setMk}){
   // accenderla anche se su IT costa troppe offerte.
   const st=mkSettings(c,code);
   const[onlyMapped,setOnlyMapped]=useState(!!st.onlyMapped);
+  // Unione o sostituzione. Prima l'interfaccia univa sempre e la sostituzione
+  // esisteva solo nell'API: per togliere delle coppie dalla mappa bisognava
+  // svuotarla e ricaricarla, e nel frattempo il file sarebbe uscito vuoto.
+  const[sostituisci,setSostituisci]=useState(false);
   useEffect(()=>{setOnlyMapped(!!mkSettings(c,code).onlyMapped)},[code]);
 
   const load=async()=>{
@@ -1699,12 +1703,21 @@ function AsinTab({config:c,save,mk,setMk}){
       const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:text});
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+      let esito;
       if(kind==="map"){
-        setMsg(`Mappa aggiornata: ${d.caricate} coppie caricate${d.abbinamenti_cambiati?`, ${d.abbinamenti_cambiati} abbinamenti cambiati`:""}${d.righe_scartate?`, ${d.righe_scartate} righe scartate`:""}.`);
+        const tolte=d.modalita==="sostituzione"?Math.max(0,(d.prima||0)-(d.info?.count||0)):0;
+        esito=`Mappa ${d.modalita==="sostituzione"?"sostituita":"aggiornata"}: ${d.caricate} coppie caricate`+
+          `${d.abbinamenti_cambiati?`, ${d.abbinamenti_cambiati} abbinamenti cambiati`:""}`+
+          `${tolte?`, ${tolte} coppie rimosse`:""}`+
+          `${d.righe_scartate?`, ${d.righe_scartate} righe scartate`:""}`+
+          ` · da ${(d.prima||0).toLocaleString()} a ${(d.info?.count||0).toLocaleString()} coppie.`;
       }else{
-        setMsg(`${d.nota} (${d.righe_nel_report} righe lette, ${d.aggiunte_al_registro} aggiunte)`);
+        esito=`${d.nota} (${d.righe_nel_report} righe lette, ${d.aggiunte_al_registro} aggiunte)`;
       }
+      // Prima il messaggio si impostava QUI e subito dopo load() lo azzerava:
+      // l'esito di un caricamento spariva senza che si potesse leggerlo.
       await load();
+      setMsg(esito);
     }catch(e){setErr(e.message)}
     finally{setBusy(null)}
   };
@@ -1765,8 +1778,8 @@ function AsinTab({config:c,save,mk,setMk}){
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
-              {busy==="map"?"⏳ Carico...":"⬆ Carica mappa verificata"}
-              <input type="file" accept=".csv,.txt" style={{display:"none"}} disabled={!!busy} onChange={e=>upload("map",e.target.files[0],false)}/>
+              {busy==="map"?"⏳ Carico...":(sostituisci?"⬆ Sostituisci la mappa":"⬆ Carica mappa verificata")}
+              <input type="file" accept=".csv,.txt" style={{display:"none"}} disabled={!!busy} onChange={e=>upload("map",e.target.files[0],sostituisci)}/>
             </label>
             {map&&map.count>0&&<Btn v="danger" onClick={clearMap} disabled={!!busy} style={{fontSize:13}}>Svuota</Btn>}
           </div>
@@ -1781,6 +1794,21 @@ function AsinTab({config:c,save,mk,setMk}){
               </div>
             ))}
           </div>
+        )}
+
+        {map&&(
+          <label style={{display:"flex",gap:8,alignItems:"flex-start",marginTop:12,fontSize:13,color:"var(--text)",cursor:"pointer"}}>
+            <input type="checkbox" checked={sostituisci} onChange={e=>setSostituisci(e.target.checked)} style={{marginTop:3}}/>
+            <span>
+              Sostituisci invece di unire
+              <span style={{display:"block",fontSize:11,color:"var(--text-muted)",lineHeight:1.6,marginTop:2}}>
+                Unione (predefinito): le coppie del file si aggiungono o correggono quelle esistenti, e quelle che nel
+                file non ci sono <strong>restano</strong>. Sostituzione: la mappa diventa esattamente il contenuto del
+                file, quindi le coppie che hai tolto vengono <strong>rimosse</strong>. Serve quando una coppia va
+                eliminata — per esempio un'offerta che vive già su un'altra pagina e non si può spostare.
+              </span>
+            </span>
+          </label>
         )}
 
         {map&&map.collisions>0&&(

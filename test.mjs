@@ -928,6 +928,28 @@ t("l'handler e il client hanno davvero le guardie", () => {
 });
 
 console.log("\n── blacklist: separatori e duplicati ──");
+t("il tab ASIN offre la sostituzione della mappa, non solo l'unione", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const tab = html.slice(html.indexOf("function AsinTab"), html.indexOf("// ─── Tab Regole") > 0 ? html.indexOf("// ─── Tab Regole") : html.indexOf("function RulesTab"));
+  // L'interfaccia passava sempre replace=false: per togliere una coppia dalla
+  // mappa non c'era modo se non svuotarla, e nel frattempo un file generato con
+  // "solo ASIN verificato" sarebbe uscito con zero prodotti.
+  assert.ok(!/upload\("map",e\.target\.files\[0\],false\)/.test(tab), "il caricamento della mappa è ancora fisso su unione");
+  assert.ok(/upload\("map",e\.target\.files\[0\],sostituisci\)/.test(tab), "non passa la modalità scelta");
+  assert.ok(/setSostituisci/.test(tab), "manca la spunta per sostituire");
+  assert.ok(/replace\?"&replace=1":""/.test(tab), "non manda replace=1 all'API");
+});
+
+t("l'esito di un caricamento non viene azzerato dal ricarico", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const tab = html.slice(html.indexOf("function AsinTab"), html.indexOf("function RulesTab"));
+  // load() comincia con setMsg(null): impostare il messaggio PRIMA di await
+  // load() lo faceva sparire, e un caricamento sembrava non aver fatto niente.
+  const iAwait = tab.indexOf("await load();\n      setMsg(esito)");
+  assert.ok(iAwait > 0, "il messaggio non viene impostato dopo load()");
+  assert.ok(!/setMsg\(`Mappa /.test(tab), "imposta ancora il messaggio prima del ricarico");
+});
+
 t("lo split della blacklist accetta qualsiasi separatore", () => {
   const html = fs.readFileSync("index.html", "utf8");
   const tab = html.slice(html.indexOf("function BlacklistTab"), html.indexOf("// ─── ConvertTab"));
