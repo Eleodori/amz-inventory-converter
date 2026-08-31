@@ -401,6 +401,12 @@ export function runConversion(config, csvMap, template, opts = {}) {
       blacklisted: blocked,
       with_asin: records.filter(r => r.asin).length,
       without_asin: records.filter(r => !r.asin).length,
+      // Una riga senza ASIN a quantita' 0 non mette niente in vendita: serve a
+      // spegnere un'offerta che esiste gia', e l'abbinamento non lo decide
+      // nessuno. Contarla fra le "righe in lotteria" faceva scattare un avviso
+      // per un file che invece era perfetto.
+      without_asin_active: records.filter(r => !r.asin && Number(r.qty) > 0).length,
+      without_asin_zeroed: records.filter(r => !r.asin && !(Number(r.qty) > 0)).length,
       unmapped_skipped: unmappedSkipped,
       asin_map_size: Object.keys(asinMap).length,
       by_supplier: bySupplier,

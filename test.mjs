@@ -928,6 +928,35 @@ t("l'handler e il client hanno davvero le guardie", () => {
 });
 
 console.log("\n── blacklist: separatori e duplicati ──");
+t("le righe senza ASIN a quantita' 0 non contano come righe in lotteria", () => {
+  // Un file con "solo ASIN verificato" attivo puo' contenere righe col solo EAN:
+  // sono le disattivazioni. Contarle fra le righe che vanno in vendita col solo
+  // EAN faceva comparire l'avviso arancione su un file corretto.
+  const recs = [
+    { ean: "1", asin: "B01", qty: 5 },
+    { ean: "2", asin: "B02", qty: 0 },
+    { ean: "3", qty: 0 },              // disattivazione, senza ASIN
+    { ean: "4", qty: 0 },
+    { ean: "5", qty: 3 },              // questa si' e' in lotteria
+  ];
+  const without_asin = recs.filter(r => !r.asin).length;
+  const active = recs.filter(r => !r.asin && Number(r.qty) > 0).length;
+  const zeroed = recs.filter(r => !r.asin && !(Number(r.qty) > 0)).length;
+  assert.equal(without_asin, 3);
+  assert.equal(active, 1);
+  assert.equal(zeroed, 2);
+  assert.equal(active + zeroed, without_asin);
+  const conv = fs.readFileSync("netlify/functions/_lib/converter.mjs", "utf8");
+  assert.ok(/without_asin_active: records\.filter\(r => !r\.asin && Number\(r\.qty\) > 0\)\.length/.test(conv), "il converter non separa le righe senza ASIN in vendita");
+  assert.ok(/without_asin_zeroed/.test(conv), "manca il conteggio delle disattivazioni senza ASIN");
+  const st = fs.readFileSync("netlify/functions/_lib/stores.mjs", "utf8");
+  assert.ok(/without_asin_active: stats\.without_asin_active/.test(st), "prevSnapshot non porta il nuovo campo: il confronto col giorno prima resterebbe disomogeneo");
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.ok(/without_asin_active/.test(html), "il banner non usa il conteggio delle sole righe in vendita");
+  // La frase che dava per certa una causa che non possiamo conoscere.
+  assert.ok(!/Sono EAN nuovi che il fornitore ha iniziato a mandare/.test(html), "il banner afferma ancora una causa non verificabile");
+});
+
 t("il tab ASIN offre la sostituzione della mappa, non solo l'unione", () => {
   const html = fs.readFileSync("index.html", "utf8");
   const tab = html.slice(html.indexOf("function AsinTab"), html.indexOf("// ─── Tab Regole") > 0 ? html.indexOf("// ─── Tab Regole") : html.indexOf("function RulesTab"));

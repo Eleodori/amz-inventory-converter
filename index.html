@@ -1472,7 +1472,9 @@ function StatsBlock({stats}){
       ]}/>
       <KpiRow items={[
         ["Con ASIN",stats.with_asin,"Righe con ASIN verificato: l'offerta è inchiodata al prodotto giusto"],
-        ["Senza ASIN",stats.without_asin,"Righe inviate col solo EAN: l'abbinamento lo fa Amazon"],
+        ["Senza ASIN in vendita",
+          typeof stats.without_asin_active==="number"?stats.without_asin_active:stats.without_asin,
+          "Righe messe in vendita col solo EAN: l'abbinamento lo fa Amazon. Le righe col solo EAN a quantità 0 non contano qui: spengono un'offerta esistente."],
         ["Esclusi non mappati",stats.unmapped_skipped,"Esclusi perché senza ASIN verificato (opzione attiva nel tab ASIN)"],
         ["EAN non validi",stats.bad_ean,"Codici non numerici, lunghezza errata o cifra di controllo sbagliata"],
         ["Sotto soglia",stats.below_min_stock,"Esclusi perché lo stock fornitore è sotto la soglia minima"],
@@ -2120,22 +2122,43 @@ function MarketBlock({code,config:c,data,tinfo,molti,generating,acting,saving,on
   const corpo=(
     <div>
       {/* Righe col solo EAN: informativo, arancione solo se peggiora. */}
-      {latest&&latest.stats&&latest.stats.without_asin>0&&(()=>{
-        const now=latest.stats.without_asin, tot=latest.stats.total_rows||0;
-        const before=typeof latest.prev?.without_asin==="number"?latest.prev.without_asin:null;
-        const delta=before===null?null:now-before;
-        const worse=delta!==null&&delta>0;
-        const pct=tot?Math.round(now/tot*100):0;
+      {latest&&latest.stats&&(()=>{
+        const st=latest.stats, tot=st.total_rows||0;
+        // Solo le righe senza ASIN che vanno DAVVERO in vendita. Quelle a
+        // quantita' 0 spengono un'offerta esistente: non creano nessun
+        // abbinamento, e contarle qui faceva gridare al lupo su file corretti.
+        const attive=typeof st.without_asin_active==="number"?st.without_asin_active:st.without_asin;
+        const spente=typeof st.without_asin_zeroed==="number"
+          ?st.without_asin_zeroed
+          :Math.max(0,(st.without_asin||0)-(attive||0));
+        if(!attive&&!spente)return null;
+        const before=typeof latest.prev?.without_asin_active==="number"?latest.prev.without_asin_active
+          :(typeof latest.prev?.without_asin==="number"?latest.prev.without_asin:null);
+        const delta=before===null?null:attive-before;
+        const worse=delta!==null&&delta>0&&attive>0;
+        const pct=tot?Math.round(attive/tot*100):0;
+        if(!attive){
+          return(
+            <Card>
+              <p style={{color:"var(--text-muted)",margin:0,fontSize:13,lineHeight:1.6}}>
+                ✓ Nessuna riga in vendita col solo EAN: ogni prodotto messo in vendita ha l'ASIN verificato.
+                Le <strong>{spente.toLocaleString()}</strong> righe col solo EAN nel file sono tutte a quantità 0,
+                servono a spegnere offerte che esistono già e non creano nessun abbinamento.
+              </p>
+            </Card>
+          );
+        }
         return(
           <Card accent={worse?"#f59e0b":undefined}>
             <p style={{color:worse?"#f59e0b":"var(--text-muted)",margin:0,fontSize:13,lineHeight:1.6}}>
-              {worse?"⚠️":"ℹ️"} <strong>{now.toLocaleString()}</strong> righe su {tot.toLocaleString()} ({pct}%)
-              sono inviate col solo EAN: per quelle l'abbinamento alla pagina prodotto lo decide Amazon.
+              {worse?"⚠️":"ℹ️"} <strong>{attive.toLocaleString()}</strong> righe su {tot.toLocaleString()} ({pct}%)
+              vanno in vendita col solo EAN: per quelle l'abbinamento alla pagina prodotto lo decide Amazon.
+              {spente>0&&` Altre ${spente.toLocaleString()} righe col solo EAN sono a quantità 0 e servono solo a spegnere offerte esistenti.`}
               {delta===null?" Non ho un file precedente con cui confrontarlo.":
                delta===0?" Come nel file precedente.":
                delta<0?` ${Math.abs(delta).toLocaleString()} in meno del file precedente.`:
                         ` ${delta.toLocaleString()} in più del file precedente (erano ${before.toLocaleString()}).`}
-              {worse&&" Sono EAN nuovi che il fornitore ha iniziato a mandare e che la mappa verificata non copre: rigenerala e ricaricala dal tab 🔗 ASIN."}
+              {worse&&" Possono essere EAN nuovi che il fornitore ha iniziato a mandare, oppure coppie che sono state tolte dalla mappa: controlla il tab 🔗 ASIN."}
               {!worse&&" Per ridurle, aggiorna la mappa verificata dal tab 🔗 ASIN."}
             </p>
           </Card>

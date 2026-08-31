@@ -122,6 +122,10 @@ export function prevSnapshot(stats) {
   if (!stats) return null;
   return {
     without_asin: stats.without_asin ?? null,
+    // Il confronto del banner usa questo: le righe senza ASIN che vanno
+    // davvero in vendita. Sui file generati prima che esistesse il campo si
+    // ricade su without_asin, che era la definizione di allora.
+    without_asin_active: stats.without_asin_active ?? null,
     with_asin: stats.with_asin ?? null,
     total_rows: stats.total_rows ?? null,
     total_products: stats.total_products ?? null,
