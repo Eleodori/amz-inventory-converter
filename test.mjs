@@ -957,6 +957,21 @@ t("le righe senza ASIN a quantita' 0 non contano come righe in lotteria", () => 
   assert.ok(!/Sono EAN nuovi che il fornitore ha iniziato a mandare/.test(html), "il banner afferma ancora una causa non verificabile");
 });
 
+t("il design non ha piu' colori scritti a mano nei componenti", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  // I quattro colori dell'app vecchia erano ripetuti 85 volte come esadecimali:
+  // non cambiavano col tema e in chiaro alcuni erano illeggibili.
+  for (const hex of ["#6366f1", "#10b981", "#ef4444", "#f59e0b"])
+    assert.ok(!html.includes(hex), `il colore ${hex} e' ancora scritto a mano`);
+  // Il carattere di sistema e le cifre tabulari sono il cuore del restyle.
+  assert.ok(/--font:-apple-system/.test(html), "manca il carattere di sistema");
+  assert.ok(/font-variant-numeric:tabular-nums/.test(html), "mancano le cifre a larghezza fissa");
+  // Le etichette maiuscole spaziate sono state tolte da tutti i campi.
+  assert.ok(!/textTransform:"uppercase"/.test(html), "restano etichette in maiuscolo spaziato");
+  // I tab sono un controllo segmentato con lo stato leggibile da chi non vede.
+  assert.ok(/className="seg" role="tab" aria-selected=\{tab===t\.id\}/.test(html), "i tab non dichiarano quale e' selezionato");
+});
+
 t("l'inventory rimanda alla pagina fatture, e le fatture tornano indietro", () => {
   const idx = fs.readFileSync("index.html", "utf8");
   assert.ok(/<a href="fatture\.html" className="navlink"/.test(idx), "manca il link alle fatture nell'header");
@@ -964,8 +979,13 @@ t("l'inventory rimanda alla pagina fatture, e le fatture tornano indietro", () =
   // La regola non deve finire dentro la media query: ci era finita alla prima
   // stesura e il pulsante restava senza bordo sopra i 600px.
   const css = idx.match(/<style>([\s\S]*?)<\/style>/)[1];
-  const iNav = css.indexOf(".navlink{"), iMedia = css.indexOf("@media(max-width:600px)");
-  assert.ok(iNav > 0 && iMedia > 0 && iNav < iMedia, ".navlink e' dentro la media query dei 600px");
+  // Il punto di rottura puo' cambiare: cerchiamo la prima media query "stretta"
+  // qualunque sia la soglia. La regola non deve finirci dentro, altrimenti il
+  // pulsante resta senza bordo sui monitor.
+  const iNav = css.indexOf(".navlink{"), iMedia = css.search(/@media\(max-width:/);
+  assert.ok(iNav > 0, "manca la regola .navlink");
+  assert.ok(iMedia > 0, "nessuna media query per lo schermo stretto");
+  assert.ok(iNav < iMedia, ".navlink e' dentro la media query dello schermo stretto");
   assert.equal(css.split("{").length, css.split("}").length, "graffe del CSS non bilanciate");
   const fat = fs.readFileSync("fatture.html", "utf8");
   assert.ok(/<a href="index\.html" className="navlink"/.test(fat), "manca il ritorno all'inventory");

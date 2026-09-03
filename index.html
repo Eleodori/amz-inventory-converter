@@ -10,44 +10,99 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+/* ─────────────────────────────────────────────────────────────────────────────
+   I nomi delle variabili sono quelli di prima (--bg-card, --border, ...):
+   centinaia di stili inline nei componenti li usano, e ripuntarli qui cambia
+   faccia a tutta l'app senza toccare una riga di logica.
+   ───────────────────────────────────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'DM Sans',sans-serif;min-height:100vh;transition:background .2s,color .2s}
-::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg-card)}::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:3px}
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
+  --radius:14px;--radius-sm:9px;
+}
+body{
+  font-family:var(--font);min-height:100vh;font-size:15px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;transition:background .2s,color .2s;
+}
+/* Cifre a larghezza fissa: le colonne di numeri si allineano davvero */
+.num,input[type=number]{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:5px;border:2px solid var(--bg)}
+
 body[data-theme="dark"]{
---bg:#0f0f1e;--bg-card:#1a1a2e;--bg-input:#0f0f1e;--bg-stat:#0f0f1e;
---bg-header-start:#1a1a3e;--bg-header-end:#0f0f1e;
---border:#2a2a4a;--border-input:#3a3a5a;
---text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
---tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
---ghost-border:#3a3a5a;--ghost-text:#8888cc;
---badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;
---bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
---accent-form:#a5b4fc;
---tier-bg:#1a1a3e;--tier-border:#2a2a5a;
---info-bg:#1a2a1a;--info-border:#2a4a2a;--info-text:#86efac;
---chart-bar:#6366f1;--chart-bar2:#10b981;--chart-grid:#2a2a4a;
+--bg:#000000;--bg-card:#1c1c1e;--bg-input:#2c2c2e;--bg-stat:#1c1c1e;
+--bg-header-start:#000000;--bg-header-end:#000000;
+--border:rgba(255,255,255,.11);--border-input:rgba(255,255,255,.16);
+--text:#f5f5f7;--text-muted:#a1a1a6;--text-label:#a1a1a6;
+--accent:#0a84ff;--accent-fill:#0060d0;--accent-weak:rgba(10,132,255,.16);
+--tab-active:#f5f5f7;--tab-inactive:#a1a1a6;--tab-badge:rgba(10,132,255,.18);
+--tab-bg:#161618;--tab-sel:#2c2c2e;
+--ghost-border:rgba(255,255,255,.16);--ghost-text:#0a84ff;
+--badge-info:rgba(10,132,255,.16);--badge-ok:rgba(50,213,116,.16);--badge-neutral:rgba(255,255,255,.09);--badge-warn:rgba(255,179,64,.16);
+--ok:#32d574;--warn:#ffb340;--bad:#ff6961;
+--bl-bg:rgba(255,105,97,.12);--bl-border:rgba(255,105,97,.28);--bl-text:#ff8a82;
+--accent-form:#0a84ff;
+--tier-bg:#2c2c2e;--tier-border:rgba(255,255,255,.11);
+--info-bg:rgba(50,213,116,.10);--info-border:rgba(50,213,116,.22);--info-text:#e6f6ec;
+--chart-bar:#0a84ff;--chart-bar2:#32d574;--chart-grid:rgba(255,255,255,.11);
+--shadow:0 1px 2px rgba(0,0,0,.5);
 }
 body[data-theme="light"]{
---bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
---bg-header-start:#e8e8f4;--bg-header-end:#f4f4f8;
---border:#dcdce6;--border-input:#c8c8d6;
---text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
---tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
---ghost-border:#c8c8d6;--ghost-text:#4f46e5;
---badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;
---bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
---accent-form:#4f46e5;
---tier-bg:#f0f0fa;--tier-border:#c8c8e8;
---info-bg:#f0faf0;--info-border:#c8e8c8;--info-text:#166534;
---chart-bar:#4f46e5;--chart-bar2:#10b981;--chart-grid:#dcdce6;
+--bg:#f5f5f7;--bg-card:#ffffff;--bg-input:#fafafa;--bg-stat:#ffffff;
+--bg-header-start:#f5f5f7;--bg-header-end:#f5f5f7;
+--border:rgba(0,0,0,.09);--border-input:rgba(0,0,0,.13);
+--text:#1d1d1f;--text-muted:#6e6e73;--text-label:#6e6e73;
+--accent:#0071e3;--accent-fill:#0071e3;--accent-weak:rgba(0,113,227,.10);
+--tab-active:#1d1d1f;--tab-inactive:#6e6e73;--tab-badge:rgba(0,113,227,.10);
+--tab-bg:#ececee;--tab-sel:#ffffff;
+--ghost-border:rgba(0,0,0,.13);--ghost-text:#0071e3;
+--badge-info:rgba(0,113,227,.10);--badge-ok:rgba(29,143,78,.10);--badge-neutral:rgba(0,0,0,.06);--badge-warn:rgba(255,159,10,.14);
+--ok:#1d8f4e;--warn:#a8620a;--bad:#c9262c;
+--bl-bg:rgba(201,38,44,.07);--bl-border:rgba(201,38,44,.20);--bl-text:#c9262c;
+--accent-form:#0071e3;
+--tier-bg:#fafafa;--tier-border:rgba(0,0,0,.09);
+--info-bg:rgba(29,143,78,.07);--info-border:rgba(29,143,78,.18);--info-text:#1d1d1f;
+--chart-bar:#0071e3;--chart-bar2:#1d8f4e;--chart-grid:rgba(0,0,0,.09);
+--shadow:0 1px 2px rgba(0,0,0,.04), 0 6px 20px -8px rgba(0,0,0,.10);
 }
 body{background:var(--bg);color:var(--text)}
+
+/* Header: a filo e traslucido, senza gradiente */
+.app-header{
+  position:sticky;top:0;z-index:20;
+  background:color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+}
+/* Tab: un controllo segmentato al posto di nove sottolineature */
+.app-tabs{position:sticky;top:57px;z-index:19;background:color-mix(in srgb, var(--bg) 80%, transparent);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px)}
+.segmented{display:flex;gap:2px;padding:3px;overflow-x:auto;background:var(--tab-bg);border:1px solid var(--border);border-radius:11px;scrollbar-width:none}
+.segmented::-webkit-scrollbar{display:none}
+.seg{flex:0 0 auto;border:0;background:none;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:500;color:var(--tab-inactive);padding:7px 13px;border-radius:8px;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;transition:color .15s,background .15s}
+.seg:hover{color:var(--tab-active)}
+.seg[aria-selected="true"]{background:var(--tab-sel);color:var(--tab-active);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.seg .segbadge{font-size:11px;font-weight:600;padding:1px 6px;border-radius:20px;background:var(--tab-badge);color:var(--accent)}
+
+/* Campi: il focus si vede, e non con un bordo blu spesso */
+.f:focus{outline:none;border-color:var(--accent)!important;box-shadow:0 0 0 3.5px var(--accent-weak)}
+
+.navlink{color:var(--ghost-text);text-decoration:none;font-size:13px;font-weight:500;padding:0 11px;height:30px;display:inline-flex;align-items:center;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);transition:border-color .15s,background .15s}
+.navlink:hover{border-color:var(--border-input)}
+
 @media(min-width:1024px){.app-content{max-width:960px!important}}
 @media(min-width:1280px){.app-content{max-width:1100px!important}}
 @media(min-width:1536px){.app-content{max-width:1300px!important}}
-.navlink{color:var(--ghost-text);text-decoration:none;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--ghost-border);transition:all .15s}
-.navlink:hover{background:var(--bg-input)}
-@media(max-width:600px){.app-header{padding:14px 16px!important}.app-tabs{padding:0 12px!important}.app-content{padding:16px!important}}
+@media(max-width:760px){
+  .app-header{padding:12px 16px!important}
+  .app-tabs{padding:0 16px 10px!important;top:53px}
+  .app-content{padding:16px!important}
+  /* Il titolo si accorcia invece di finire sotto i pulsanti */
+  .brandbox{overflow:hidden}
+  .brandbox h1{font-size:16px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .brandbox p,.hdr-ver{display:none!important}
+  .hdr-sync{font-size:0!important;gap:0!important}
+}
 </style>
 </head>
 <body>
@@ -105,18 +160,18 @@ function MarketPicker({config:c,value,onChange}){
   return(
     <Card style={{marginBottom:14,padding:"10px 14px"}}>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        <span style={{fontSize:11,color:"var(--text-label)",textTransform:"uppercase",letterSpacing:.5}}>Marketplace</span>
+        <span style={{fontSize:12.5,color:"var(--text-label)",fontWeight:500}}>Marketplace</span>
         {codes.map(code=>{
           const attivo=code===value;
           const m=(c.marketplaces||[]).find(x=>String(x.code).toUpperCase()===code);
           const spento=m&&m.enabled===false;
           return(
             <button key={code} onClick={()=>onChange(code)}
-              style={{padding:"6px 14px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
-                border:attivo?"1px solid #6366f1":"1px solid var(--ghost-border)",
-                background:attivo?"#6366f1":"transparent",
+              style={{height:32,padding:"0 14px",borderRadius:16,fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",
+                border:"1px solid "+(attivo?"transparent":"var(--border-input)"),
+                background:attivo?"var(--accent-fill)":"transparent",
                 color:attivo?"#fff":(spento?"var(--text-muted)":"var(--ghost-text)"),
-                opacity:spento?.55:1}}>
+                opacity:spento?.55:1,transition:"background .15s,border-color .15s"}}>
               {mpInfo(code).name}{spento?" (spento)":""}
             </button>
           );
@@ -471,20 +526,34 @@ async function getFullTemplate(code,force){
 
 
 const S={
-  card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:14},
-  label:{display:"block",fontSize:11,color:"var(--text-label)",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
-  input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box"},
-  badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
+  card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:"var(--radius)",padding:20,marginBottom:14,boxShadow:"var(--shadow)"},
+  // Etichette: non piu' maiuscolo spaziato. Erano illeggibili sopra i numeri e
+  // facevano sembrare ogni campo un'intestazione.
+  label:{display:"block",fontSize:12.5,color:"var(--text-label)",marginBottom:6,fontWeight:500},
+  input:{width:"100%",height:38,padding:"0 12px",background:"var(--bg-input)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",color:"var(--text)",fontSize:14,fontFamily:"inherit",boxSizing:"border-box",transition:"border-color .15s,box-shadow .15s"},
+  badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2.5px 9px",borderRadius:20,fontSize:11.5,fontWeight:600,display:"inline-block"})
 };
 
-function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
-function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
-function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
+/** Un accento non disegna piu' una cornice colorata attorno alla card: tinge
+    appena il fondo e lascia il bordo a filo. La cornice spessa faceva sembrare
+    urgente qualunque cosa, e con tre card accanto la pagina urlava. */
+function Card({children,style,accent}){
+  const acc=accent?{background:`color-mix(in srgb, ${accent} 7%, var(--bg-card))`,borderColor:`color-mix(in srgb, ${accent} 26%, var(--border))`}:{};
+  return<div style={{...S.card,...acc,...style}}>{children}</div>
+}
+function Inp({label,...p}){return<div style={{marginBottom:12}}>{label&&<label style={S.label}>{label}</label>}<input {...p} className={"f "+(p.className||"")} style={{...S.input,...p.style}}/></div>}
+function Sel({label,options,...p}){return<div style={{marginBottom:12}}>{label&&<label style={S.label}>{label}</label>}<select {...p} className="f" style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
 function Btn({children,onClick,v="pri",style,disabled}){
-  const bg={pri:"#6366f1",ok:"#10b981",danger:"#ef4444",ghost:"transparent"}[v];
-  const bd=v==="ghost"?"1px solid var(--ghost-border)":"none";
-  const cl=v==="ghost"?"var(--ghost-text)":"#fff";
-  return<button onClick={onClick} disabled={disabled} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",...style}}>{children}</button>
+  // Pieno solo per l'azione principale e per il verde di conferma; il resto e'
+  // testo su bordo a filo. Il rosso non e' mai pieno: cancellare non deve
+  // essere il pulsante piu' invitante della schermata.
+  const st={
+    pri:{background:"var(--accent-fill)",color:"#fff",border:"1px solid transparent"},
+    ok:{background:"var(--accent-fill)",color:"#fff",border:"1px solid transparent"},
+    danger:{background:"transparent",color:"var(--bad)",border:"1px solid var(--border-input)"},
+    ghost:{background:"transparent",color:"var(--ghost-text)",border:"1px solid var(--border-input)"},
+  }[v];
+  return<button onClick={onClick} disabled={disabled} style={{height:38,padding:"0 18px",borderRadius:19,fontFamily:"inherit",fontWeight:500,fontSize:14,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"filter .15s,background .15s,border-color .15s",display:"inline-flex",alignItems:"center",gap:7,whiteSpace:"nowrap",...st,...style}}>{children}</button>
 }
 
 // ─── Mini bar chart ──────────────────────────────────────────────────────────
@@ -539,7 +608,7 @@ function HistoryTab(){
     if(!prev)return null;
     const d=curr[field]-prev[field];
     if(d===0)return null;
-    const color=d>0?"#10b981":"#ef4444";
+    const color=d>0?"var(--ok)":"var(--bad)";
     return<span style={{color,fontSize:11,marginLeft:6}}>{d>0?"+":""}{d.toLocaleString()}</span>;
   };
 
@@ -550,7 +619,7 @@ function HistoryTab(){
   }));
 
   if(loading)return<Card><p style={{color:"var(--text-muted)",textAlign:"center"}}>Caricamento storico...</p></Card>;
-  if(error)return<Card accent="#ef4444"><p style={{color:"#ef4444"}}>❌ Errore nel caricamento: {error}</p><Btn v="ghost" onClick={fetchHistory} style={{marginTop:8}}>Riprova</Btn></Card>;
+  if(error)return<Card accent="var(--bad)"><p style={{color:"var(--bad)"}}>❌ Errore nel caricamento: {error}</p><Btn v="ghost" onClick={fetchHistory} style={{marginTop:8}}>Riprova</Btn></Card>;
   if(records.length===0)return<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna conversione salvata. Genera il tuo primo file dal tab ⚡ Converti.</p></Card>;
 
   return(
@@ -691,7 +760,7 @@ function TiersEditor({tiers,onChange}){
               <div style={{flex:1,minWidth:160,background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px",fontSize:12,lineHeight:1.7}}>
                 <div style={{color:"var(--text-muted)"}}>Es. a <strong style={{color:"var(--text)"}}>{ex}€</strong>:</div>
                 <div>Vendo a <strong style={{color:"var(--accent-form)"}}>{sellEx}€</strong></div>
-                <div>Netto: <strong style={{color:parseFloat(net)>0?"#10b981":"#ef4444"}}>{net}€</strong></div>
+                <div>Netto: <strong style={{color:parseFloat(net)>0?"var(--ok)":"var(--bad)"}}>{net}€</strong></div>
               </div>
               {tiers.length>1&&<Btn v="danger" onClick={()=>removeTier(i)} style={{fontSize:11,padding:"5px 10px",alignSelf:"flex-end"}}>✕</Btn>}
             </div>
@@ -781,7 +850,7 @@ function SuppliersTab({config:c,save}){
         </Card>
       ))}
       {ed!==null&&(
-        <Card accent="#6366f1">
+        <Card accent="var(--accent)">
           <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo fornitore":"Modifica fornitore"}</h4>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
             <Inp label="Nome" value={f.name} onChange={e=>sF({...f,name:e.target.value})} placeholder="es. Deldo"/>
@@ -795,16 +864,16 @@ function SuppliersTab({config:c,save}){
           {codes.length>1&&(
             <div style={{background:"var(--bg-stat)",borderRadius:10,padding:"10px 14px",margin:"4px 0 12px"}}>
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <span style={{fontSize:11,color:"var(--text-label)",textTransform:"uppercase",letterSpacing:.5}}>Fasce per</span>
+                <span style={{fontSize:12.5,color:"var(--text-label)",fontWeight:500}}>Fasce per</span>
                 {codes.map(code=>{
                   const att=code===codeT;
                   const ded=code===primario||(Array.isArray(f.tiersByMarket?.[code])&&f.tiersByMarket[code].length>0);
                   return(
                     <button key={code} onClick={()=>setMkT(code)}
-                      style={{padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",
-                        border:att?"1px solid #6366f1":"1px solid var(--ghost-border)",
-                        background:att?"#6366f1":"transparent",
-                        color:att?"#fff":"var(--ghost-text)"}}>
+                      style={{height:30,padding:"0 13px",borderRadius:15,fontSize:12.5,fontWeight:500,cursor:"pointer",fontFamily:"inherit",
+                        border:"1px solid "+(att?"transparent":"var(--border-input)"),
+                        background:att?"var(--accent-fill)":"transparent",
+                        color:att?"#fff":"var(--ghost-text)",transition:"background .15s,border-color .15s"}}>
                       {mpInfo(code).name}{ded?"":" (eredita)"}
                     </button>
                   );
@@ -821,7 +890,7 @@ function SuppliersTab({config:c,save}){
           )}
           <TiersEditor tiers={tiersInEdit} onChange={setTiersInEdit}/>
           {codes.length>1&&!dedicate&&codeT!==primario&&(
-            <div style={{fontSize:11,color:"#f59e0b",marginTop:-6,marginBottom:10}}>
+            <div style={{fontSize:11,color:"var(--warn)",marginTop:-6,marginBottom:10}}>
               Stai modificando le fasce di {mpInfo(primario).name}: valgono anche per {mpInfo(codeT).name} finché non gliene dai di dedicate.
             </div>
           )}
@@ -945,7 +1014,7 @@ function MarketplacesTab({config:c,save}){
       })}
 
       {ed!==null&&(
-        <Card accent="#6366f1">
+        <Card accent="var(--accent)">
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"0 14px"}}>
             <Sel label="Marketplace" value={f.code}
               onChange={e=>{const code=e.target.value;sF({...f,code,marketplaceId:mpInfo(code).id||""})}}
@@ -1045,9 +1114,9 @@ function BlacklistTab({config:c,save,pronto=true,mk,setMk}){
         {lista.length>0&&<Btn v="danger" onClick={clr} style={{fontSize:11}}>Svuota tutto</Btn>}
       </div>
       {(sporche.length>0||doppi>0)&&(
-        <Card accent="#f59e0b">
+        <Card accent="var(--warn)">
           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-            <span style={{color:"#f59e0b",fontSize:13,flex:1,minWidth:220}}>
+            <span style={{color:"var(--warn)",fontSize:13,flex:1,minWidth:220}}>
               ⚠️ La lista salvata contiene {doppi>0?`${doppi} ${doppi===1?"doppione":"doppioni"}`:""}{doppi>0&&sporche.length>0?" e ":""}
               {sporche.length>0?`${sporche.length} ${sporche.length===1?"voce che non è un EAN valido":"voci che non sono EAN validi"}`:""}. Non bloccano niente, ma vanno tolte.
             </span>
@@ -1068,13 +1137,13 @@ function BlacklistTab({config:c,save,pronto=true,mk,setMk}){
       </Card>
 
       {esito&&(
-        <Card accent={esito.scartati.length?"#f59e0b":"#10b981"}>
+        <Card accent={esito.scartati.length?"var(--warn)":"var(--ok)"}>
           <p style={{margin:0,fontSize:13,lineHeight:1.7,color:"var(--text)"}}>
             Letti <strong>{esito.letti.toLocaleString()}</strong> numeri:
-            {" "}<strong style={{color:"#10b981"}}>{esito.aggiunti.toLocaleString()} aggiunti</strong>
+            {" "}<strong style={{color:"var(--ok)"}}>{esito.aggiunti.toLocaleString()} aggiunti</strong>
             {esito.gia>0&&<> · {esito.gia.toLocaleString()} già in lista</>}
             {esito.ripetuti>0&&<> · {esito.ripetuti.toLocaleString()} ripetuti nell’incolla</>}
-            {esito.scartati.length>0&&<> · <span style={{color:"#f59e0b"}}>{esito.scartati.length.toLocaleString()} scartati</span> perché non sono EAN validi</>}
+            {esito.scartati.length>0&&<> · <span style={{color:"var(--warn)"}}>{esito.scartati.length.toLocaleString()} scartati</span> perché non sono EAN validi</>}
             {esito.scartati.length>0&&(
               <span style={{display:"block",marginTop:6,fontFamily:"monospace",fontSize:11,color:"var(--text-muted)",wordBreak:"break-all"}}>
                 {esito.scartati.slice(0,8).join(" \u00b7 ")}{esito.scartati.length>8?` \u2026 e altri ${esito.scartati.length-8}`:""}
@@ -1230,7 +1299,7 @@ function ConvertTab({config:c}){
     finally{setSaving(false)}
   };
 
-  if(!c.suppliers.length||!c.marketplaces.length)return<Card><p style={{color:"#f59e0b",textAlign:"center",margin:0}}>⚠️ Configura almeno un fornitore e un marketplace.</p></Card>;
+  if(!c.suppliers.length||!c.marketplaces.length)return<Card><p style={{color:"var(--warn)",textAlign:"center",margin:0}}>⚠️ Configura almeno un fornitore e un marketplace.</p></Card>;
   const uc=Object.keys(ups).length;
 
   return(
@@ -1267,11 +1336,11 @@ function ConvertTab({config:c}){
                 <span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{sup.tiers?sup.tiers.length+" fasce":"flat"}</span>
                 {sup.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {sup.stockCol}</span>}
               </div>
-              {u&&<p style={{color:"#10b981",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}
+              {u&&<p style={{color:"var(--ok)",fontSize:12,margin:"4px 0 0"}}>✓ {u.fn}</p>}
             </div>
             <div style={{display:"flex",gap:6}}>
               {u&&<Btn v="danger" onClick={()=>rmUp(sup.name)} style={{fontSize:11,padding:"5px 10px"}}>✕</Btn>}
-              <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"#6366f1",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+              <label style={{padding:"8px 16px",borderRadius:8,background:u?"var(--border)":"var(--accent)",color:u?"var(--text)":"#fff",fontWeight:600,fontSize:13,cursor:"pointer"}}>
                 {u?"Sostituisci":"Carica CSV"}<input type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>hFile(sup.name,e.target.files[0])}/>
               </label>
             </div>
@@ -1287,24 +1356,24 @@ function ConvertTab({config:c}){
       </div>
 
       {progress&&(
-        <Card accent="#6366f1">
+        <Card accent="var(--accent)">
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <span style={{fontSize:13,color:"var(--text)",fontWeight:600}}>{progress.msg}</span>
             <span style={{fontSize:12,color:"var(--accent-form)",fontWeight:700}}>{progress.pct}%</span>
           </div>
           <div style={{background:"var(--bg-input)",borderRadius:6,height:8,overflow:"hidden"}}>
-            <div style={{height:"100%",width:progress.pct+"%",background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:6,transition:"width .3s ease"}}/>
+            <div style={{height:"100%",width:progress.pct+"%",background:"linear-gradient(90deg,var(--accent),var(--ok))",borderRadius:6,transition:"width .3s ease"}}/>
           </div>
         </Card>
       )}
 
-      {res?.error&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
+      {res?.error&&<Card accent="var(--bad)"><p style={{color:"var(--bad)",margin:0,whiteSpace:"pre-wrap"}}>❌ {res.error}</p></Card>}
 
       {res?.records&&(
         <div>
-          <Card accent="#10b981">
+          <Card accent="var(--ok)">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
-              <h4 style={{color:"#10b981",margin:0}}>✓ File generato</h4>
+              <h4 style={{color:"var(--ok)",margin:0}}>✓ File generato</h4>
               <Btn v="ghost" onClick={saveToHistory} disabled={saving} style={{fontSize:13}}>{saving?"Salvataggio...":"📊 Salva nello storico"}</Btn>
             </div>
             <DownloadBox records={res.records} stats={res.stats} label={res.records.length.toLocaleString()+" righe"}/>
@@ -1321,9 +1390,9 @@ function ConvertTab({config:c}){
 // ─── Alert Bell ──────────────────────────────────────────────────────────────
 function AlertBell({onClick,count}){
   return(
-    <button onClick={onClick} title="Notifiche" style={{position:"relative",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
+    <button onClick={onClick} title="Notifiche" style={{position:"relative",width:30,height:30,display:"inline-flex",alignItems:"center",justifyContent:"center",background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:8,cursor:"pointer",fontSize:14,lineHeight:1,color:"var(--text)",transition:"border-color .15s"}}>
       🔔
-      {count>0&&<span style={{position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",borderRadius:"50%",fontSize:9,fontWeight:700,width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center"}}>{count>9?"9+":count}</span>}
+      {count>0&&<span style={{position:"absolute",top:-4,right:-4,background:"var(--bad)",color:"#fff",borderRadius:"50%",fontSize:9,fontWeight:700,width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center"}}>{count>9?"9+":count}</span>}
     </button>
   );
 }
@@ -1386,7 +1455,7 @@ function DownloadBox({records,stats,filename,label,accent}){
         </Btn>
         {label&&<span style={{fontSize:11,color:"var(--text-muted)"}}>{label}</span>}
       </div>
-      {err&&<p style={{color:"#ef4444",fontSize:12,margin:"8px 0 0"}}>❌ {err}</p>}
+      {err&&<p style={{color:"var(--bad)",fontSize:12,margin:"8px 0 0"}}>❌ {err}</p>}
     </div>
   );
 }
@@ -1425,7 +1494,7 @@ function PreviewTable({previewData,total}){
                       <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-neutral)"),fontSize:10}}>{row.tierKey}</span></td>
                       <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{hasCost?row.costPrice.toFixed(2):"—"}</td>
                       <td style={{padding:"5px 10px",fontWeight:600,color:"var(--accent-form)"}}>{Number(row.salePrice||0).toFixed(2)}</td>
-                      <td style={{padding:"5px 10px",fontWeight:600,color:net!==null&&parseFloat(net)>0?"#10b981":"#ef4444"}}>{net===null?"—":net}</td>
+                      <td style={{padding:"5px 10px",fontWeight:600,color:net!==null&&parseFloat(net)>0?"var(--ok)":"var(--bad)"}}>{net===null?"—":net}</td>
                       <td style={{padding:"5px 10px"}}><span style={{...S.badge("var(--badge-ok)"),fontSize:10}}>{row.supplier}</span></td>
                       <td style={{padding:"5px 10px",color:"var(--text-muted)"}}>{row.qty}</td>
                       <td style={{padding:"5px 10px"}}>
@@ -1449,13 +1518,24 @@ function PreviewTable({previewData,total}){
 }
 
 // ─── KPI ─────────────────────────────────────────────────────────────────────
+/** I riquadri diventano una griglia unica separata da linee a filo: le colonne
+    di numeri si leggono in verticale, e il valore sta chiaramente SOPRA la sua
+    etichetta. Prima erano scatole staccate e centrate, e i numeri si leggevano
+    sfalsati rispetto alla riga a cui appartenevano. */
+/** Formato italiano fisso. Prima si affidava al locale del browser: sullo
+    stesso file un browser scriveva 7.265, un altro 7,265 e un altro 7265. */
+const fmtN=v=>Number(v||0).toLocaleString("it-IT");
+
 function KpiRow({items}){
   return(
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(115px,1fr))",gap:10,marginBottom:14}}>
+    // Le linee di separazione sono disegnate DENTRO ogni cella, non col fondo
+    // che traspare dai gap: se l'ultima riga e' incompleta, lo spazio vuoto
+    // resta pulito invece di mostrare una macchia del colore del bordo.
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(124px,1fr))",gap:0,background:"var(--bg-stat)",border:"1px solid var(--border)",borderRadius:"var(--radius)",overflow:"hidden",marginBottom:14}}>
       {items.map(([l,v,hint])=>(
-        <div key={l} title={hint||""} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-          <div style={{fontSize:20,fontWeight:700,color:"var(--text)"}}>{(v||0).toLocaleString()}</div>
-          <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
+        <div key={l} title={hint||""} style={{padding:"14px 16px",boxShadow:"inset -1px -1px 0 var(--border)"}}>
+          <div className="num" style={{fontSize:24,fontWeight:600,letterSpacing:"-.023em",lineHeight:1.15,color:(v||0)===0?"var(--text-muted)":"var(--text)"}}>{fmtN(v)}</div>
+          <div style={{fontSize:12,color:"var(--text-label)",marginTop:3}}>{l}</div>
         </div>
       ))}
     </div>
@@ -1465,14 +1545,14 @@ function KpiRow({items}){
 function StatsBlock({stats}){
   return(
     <div>
+      {/* Una griglia sola: tredici numeri in tre scatole separate si leggevano
+          come tre argomenti diversi, e le colonne non si allineavano fra loro. */}
       <KpiRow items={[
         ["Attivi",stats.total_products,"Prodotti disponibili dal fornitore"],
         ["Disattivati",stats.zeroed,"SKU già pubblicate e oggi assenti dal listino: escono con quantità 0"],
         ["Righe file",stats.total_rows,"Totale righe nel file da caricare"],
         ["Righe lette",stats.total_read],
         ["Scartate",stats.total_skipped],
-      ]}/>
-      <KpiRow items={[
         ["Con ASIN",stats.with_asin,"Righe con ASIN verificato: l'offerta è inchiodata al prodotto giusto"],
         ["Senza ASIN in vendita",
           typeof stats.without_asin_active==="number"?stats.without_asin_active:stats.without_asin,
@@ -1480,8 +1560,6 @@ function StatsBlock({stats}){
         ["Esclusi non mappati",stats.unmapped_skipped,"Esclusi perché senza ASIN verificato (opzione attiva nel tab ASIN)"],
         ["EAN non validi",stats.bad_ean,"Codici non numerici, lunghezza errata o cifra di controllo sbagliata"],
         ["Sotto soglia",stats.below_min_stock,"Esclusi perché lo stock fornitore è sotto la soglia minima"],
-      ]}/>
-      <KpiRow items={[
         ["Duplicati",stats.duplicates_resolved],
         ["Blacklist",stats.blacklisted],
         ["Non più tracciate",stats.dropped_from_tracking,"SKU a zero da più giorni del limite: smettiamo di ripeterle"],
@@ -1489,9 +1567,9 @@ function StatsBlock({stats}){
       {stats.by_supplier&&Object.keys(stats.by_supplier).length>0&&(
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
           {Object.entries(stats.by_supplier).map(([n,ct])=>(
-            <div key={n} style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+            <div key={n} style={{background:"var(--bg-input)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:"7px 13px",display:"flex",alignItems:"center",gap:8}}>
               <strong style={{fontSize:13}}>{n}</strong>
-              <span style={{...S.badge("#6366f1"),color:"#fff"}}>{ct.toLocaleString()}</span>
+              <span style={{...S.badge("var(--badge-info)"),color:"var(--accent)"}}>{fmtN(ct)}</span>
             </div>
           ))}
         </div>
@@ -1580,25 +1658,25 @@ function TemplateTab({config:c,mk,setMk}){
       </Card>
 
       {!info&&(
-        <Card accent="#f59e0b">
-          <h4 style={{margin:"0 0 6px",color:"#f59e0b"}}>Nessun template per {mpInfo(code).name}</h4>
+        <Card accent="var(--warn)">
+          <h4 style={{margin:"0 0 6px",color:"var(--warn)"}}>Nessun template per {mpInfo(code).name}</h4>
           <p style={{margin:"0 0 10px",fontSize:13,color:"var(--text)",lineHeight:1.6}}>
             Senza template questo marketplace non genera nessun file. Scaricalo da Seller Central
             <strong> con il marketplace impostato su {mpInfo(code).name}</strong> — Catalogo → Aggiungi prodotti
             tramite caricamento → Scarica un foglio di calcolo — e caricalo qui. Il file italiano non va bene:
             dieci nomi di colonna contengono l'id del marketplace.
           </p>
-          <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1,display:"inline-block"}}>
+          <label style={{height:38,padding:"0 18px",display:"inline-flex",alignItems:"center",gap:7,borderRadius:19,background:"var(--accent-fill)",color:"#fff",fontWeight:500,fontSize:14,cursor:busy?"wait":"pointer",opacity:busy?.5:1,display:"inline-block"}}>
             {busy?"⏳ Elaboro...":"⬆ Carica il template di "+mpInfo(code).name}
             <input type="file" accept=".xlsm,.xlsx,.xls" style={{display:"none"}} disabled={busy} onChange={e=>upload(e.target.files[0])}/>
           </label>
         </Card>
       )}
 
-      {info&&<Card accent={ok?"#10b981":"#ef4444"}>
+      {info&&<Card accent={ok?"var(--ok)":"var(--bad)"}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
           <div>
-            <h4 style={{margin:"0 0 4px",color:ok?"#10b981":"#ef4444"}}>{ok?"✓ Template valido":"⚠️ Template incompleto"}</h4>
+            <h4 style={{margin:"0 0 4px",color:ok?"var(--ok)":"var(--bad)"}}>{ok?"✓ Template valido":"⚠️ Template incompleto"}</h4>
             <div style={{fontSize:12,color:"var(--text-muted)"}}>
               {info.isSeed?"Default incluso nell'app":"Caricato da te"}
               {info.source?" • "+info.source:""}
@@ -1606,7 +1684,7 @@ function TemplateTab({config:c,mk,setMk}){
             </div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
+            <label style={{height:38,padding:"0 18px",display:"inline-flex",alignItems:"center",gap:7,borderRadius:19,background:"var(--accent-fill)",color:"#fff",fontWeight:500,fontSize:14,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
               {busy?"⏳ Elaboro...":"⬆ Carica template Amazon"}
               <input type="file" accept=".xlsm,.xlsx,.xls" style={{display:"none"}} disabled={busy} onChange={e=>upload(e.target.files[0])}/>
             </label>
@@ -1634,7 +1712,7 @@ function TemplateTab({config:c,mk,setMk}){
                 <div>fulfillment_channel_code → <strong>{v.channelMerchant}</strong></div>
                 <div>identificativo esterno → <strong>{v.ean}</strong></div>
               </div>
-              <p style={{margin:"8px 0 0",fontSize:11,color:dalTemplate?"#10b981":"#f59e0b",lineHeight:1.6}}>
+              <p style={{margin:"8px 0 0",fontSize:11,color:dalTemplate?"var(--ok)":"var(--warn)",lineHeight:1.6}}>
                 {dalTemplate
                   ? "✓ Letti dal foglio “Dropdown Lists” del template, quindi sono esattamente quelli che Amazon si aspetta per questo marketplace e questa lingua."
                   : `⚠️ Il template caricato non porta le liste dei valori validi, sto usando una tabella interna (${v.origine}). Su un marketplace non italiano queste stringhe non sono verificate e Amazon potrebbe rifiutare tutte le righe: ricarica il template scaricandolo da Seller Central.`}
@@ -1663,8 +1741,8 @@ function TemplateTab({config:c,mk,setMk}){
         )}
       </Card>}
 
-      {msg&&<Card accent="#10b981"><p style={{color:"#10b981",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
-      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13}}>❌ {err}</p></Card>}
+      {msg&&<Card accent="var(--ok)"><p style={{color:"var(--ok)",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
+      {err&&<Card accent="var(--bad)"><p style={{color:"var(--bad)",margin:0,fontSize:13}}>❌ {err}</p></Card>}
     </div>
   );
 }
@@ -1768,10 +1846,10 @@ function AsinTab({config:c,save,mk,setMk}){
       </Card>
 
       {/* ── Mappa EAN → ASIN ── */}
-      <Box accent={map&&map.count>0?"#10b981":"#f59e0b"}>
+      <Box accent={map&&map.count>0?"var(--ok)":"var(--warn)"}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
           <div>
-            <h4 style={{margin:"0 0 4px",color:map&&map.count>0?"#10b981":"#f59e0b"}}>
+            <h4 style={{margin:"0 0 4px",color:map&&map.count>0?"var(--ok)":"var(--warn)"}}>
               {map&&map.count>0?"✓ Mappa EAN → ASIN attiva":"⚠️ Nessuna mappa caricata"}
             </h4>
             <div style={{fontSize:12,color:"var(--text-muted)"}}>
@@ -1781,7 +1859,7 @@ function AsinTab({config:c,save,mk,setMk}){
             </div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
+            <label style={{height:38,padding:"0 18px",display:"inline-flex",alignItems:"center",gap:7,borderRadius:19,background:"var(--accent-fill)",color:"#fff",fontWeight:500,fontSize:14,cursor:busy?"wait":"pointer",opacity:busy?.5:1}}>
               {busy==="map"?"⏳ Carico...":(sostituisci?"⬆ Sostituisci la mappa":"⬆ Carica mappa verificata")}
               <input type="file" accept=".csv,.txt" style={{display:"none"}} disabled={!!busy} onChange={e=>upload("map",e.target.files[0],sostituisci)}/>
             </label>
@@ -1793,7 +1871,7 @@ function AsinTab({config:c,save,mk,setMk}){
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
             {[["Coppie EAN→ASIN",map.count],["ASIN distinti",map.distinctAsins],["Collisioni",map.collisions]].map(([l,v])=>(
               <div key={l} style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
-                <div style={{fontSize:20,fontWeight:700,color:l==="Collisioni"&&v>0?"#ef4444":"var(--text)"}}>{(v||0).toLocaleString()}</div>
+                <div style={{fontSize:20,fontWeight:700,color:l==="Collisioni"&&v>0?"var(--bad)":"var(--text)"}}>{(v||0).toLocaleString()}</div>
                 <div style={{fontSize:11,color:"var(--text-label)",marginTop:2}}>{l}</div>
               </div>
             ))}
@@ -1835,7 +1913,7 @@ function AsinTab({config:c,save,mk,setMk}){
         <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid var(--border)"}}>
           <div onClick={toggleOnlyMapped} style={{display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
             <div style={{width:18,height:18,borderRadius:4,flexShrink:0,marginTop:1,
-              border:onlyMapped?"none":"2px solid var(--border-input)",background:onlyMapped?"#10b981":"transparent",
+              border:onlyMapped?"none":"2px solid var(--border-input)",background:onlyMapped?"var(--ok)":"transparent",
               color:"#fff",fontSize:13,lineHeight:"18px",textAlign:"center",fontWeight:700}}>{onlyMapped?"✓":""}</div>
             <div>
               <div style={{fontSize:13,fontWeight:600,color:"var(--text)"}}>Pubblica solo gli EAN con ASIN verificato</div>
@@ -1862,7 +1940,7 @@ function AsinTab({config:c,save,mk,setMk}){
               per sempre.
             </div>
           </div>
-          <label style={{padding:"8px 16px",borderRadius:8,background:"#6366f1",color:"#fff",fontWeight:600,fontSize:13,cursor:busy?"wait":"pointer",opacity:busy?.5:1,whiteSpace:"nowrap"}}>
+          <label style={{height:38,padding:"0 18px",display:"inline-flex",alignItems:"center",gap:7,borderRadius:19,background:"var(--accent-fill)",color:"#fff",fontWeight:500,fontSize:14,cursor:busy?"wait":"pointer",opacity:busy?.5:1,whiteSpace:"nowrap"}}>
             {busy==="reg"?"⏳ Carico...":"⬆ Carica offerte attive"}
             <input type="file" accept=".txt,.csv,.tsv" style={{display:"none"}} disabled={!!busy} onChange={e=>upload("reg",e.target.files[0])}/>
           </label>
@@ -1879,8 +1957,8 @@ function AsinTab({config:c,save,mk,setMk}){
         )}
       </Box>
 
-      {msg&&<Card accent="#10b981"><p style={{color:"#10b981",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
-      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13}}>❌ {err}</p></Card>}
+      {msg&&<Card accent="var(--ok)"><p style={{color:"var(--ok)",margin:0,fontSize:13}}>✓ {msg}</p></Card>}
+      {err&&<Card accent="var(--bad)"><p style={{color:"var(--bad)",margin:0,fontSize:13}}>❌ {err}</p></Card>}
     </div>
   );
 }
@@ -1950,7 +2028,7 @@ function RulesTab({config:c,save}){
         </p>
       </Card>
 
-      <Card accent="#f59e0b">
+      <Card accent="var(--warn)">
         <h4 style={{margin:"0 0 4px",fontSize:15}}>🛡 Controllo di sicurezza</h4>
         <p style={{fontSize:12,color:"var(--text-muted)",margin:"0 0 14px",lineHeight:1.6}}>
           Se il CSV del fornitore arriva troncato o incompleto, il risultato viene messo in
@@ -1965,7 +2043,7 @@ function RulesTab({config:c,save}){
 
       <div style={{display:"flex",gap:10,alignItems:"center"}}>
         <Btn v="ok" onClick={apply} style={{padding:"10px 24px",fontSize:14}}>💾 Salva regole</Btn>
-        {saved&&<span style={{color:"#10b981",fontSize:13}}>✓ Salvato</span>}
+        {saved&&<span style={{color:"var(--ok)",fontSize:13}}>✓ Salvato</span>}
       </div>
     </div>
   );
@@ -2092,8 +2170,8 @@ function AutoTab({config:c}){
         </div>
       </Card>
 
-      {err&&<Card accent="#ef4444"><p style={{color:"#ef4444",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>❌ {err}</p></Card>}
-      {note&&<Card accent="#6366f1"><p style={{color:"var(--accent-form)",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>ℹ️ {note}</p></Card>}
+      {err&&<Card accent="var(--bad)"><p style={{color:"var(--bad)",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>❌ {err}</p></Card>}
+      {note&&<Card accent="var(--accent)"><p style={{color:"var(--accent-form)",margin:0,fontSize:13,whiteSpace:"pre-wrap"}}>ℹ️ {note}</p></Card>}
 
       {status==="loading"&&<Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Caricamento...</p></Card>}
       {status!=="loading"&&daMostrare.length===0&&(
@@ -2151,8 +2229,8 @@ function MarketBlock({code,config:c,data,tinfo,molti,generating,acting,saving,on
           );
         }
         return(
-          <Card accent={worse?"#f59e0b":undefined}>
-            <p style={{color:worse?"#f59e0b":"var(--text-muted)",margin:0,fontSize:13,lineHeight:1.6}}>
+          <Card accent={worse?"var(--warn)":undefined}>
+            <p style={{color:worse?"var(--warn)":"var(--text-muted)",margin:0,fontSize:13,lineHeight:1.6}}>
               {worse?"⚠️":"ℹ️"} <strong>{attive.toLocaleString()}</strong> righe su {tot.toLocaleString()} ({pct}%)
               vanno in vendita col solo EAN: per quelle l'abbinamento alla pagina prodotto lo decide Amazon.
               {spente>0&&` Altre ${spente.toLocaleString()} righe col solo EAN sono a quantità 0 e servono solo a spegnere offerte esistenti.`}
@@ -2168,29 +2246,29 @@ function MarketBlock({code,config:c,data,tinfo,molti,generating,acting,saving,on
       })()}
 
       {tinfo===null&&(
-        <Card accent="#ef4444">
-          <p style={{color:"#ef4444",margin:0,fontSize:13,lineHeight:1.6}}>
+        <Card accent="var(--bad)">
+          <p style={{color:"var(--bad)",margin:0,fontSize:13,lineHeight:1.6}}>
             ⚠️ Nessun template caricato per {mpInfo(code).name}: questo marketplace non genera nessun file.
             Caricalo dal tab 📄 Template scegliendo {mpInfo(code).name}.
           </p>
         </Card>
       )}
       {tinfo&&tinfo.missing&&tinfo.missing.length>0&&(
-        <Card accent="#ef4444">
-          <p style={{color:"#ef4444",margin:0,fontSize:13}}>
+        <Card accent="var(--bad)">
+          <p style={{color:"var(--bad)",margin:0,fontSize:13}}>
             ⚠️ Il template di {mpInfo(code).name} non ha tutte le colonne obbligatorie. Vai nel tab 📄 Template.
           </p>
         </Card>
       )}
 
       {pending&&(
-        <Card accent="#f59e0b">
-          <h4 style={{margin:"0 0 6px",color:"#f59e0b"}}>⏸️ Risultato in quarantena</h4>
+        <Card accent="var(--warn)">
+          <h4 style={{margin:"0 0 6px",color:"var(--warn)"}}>⏸️ Risultato in quarantena</h4>
           <p style={{fontSize:12,color:"var(--text-muted)",margin:"0 0 10px",lineHeight:1.6}}>
             Il controllo di sicurezza ha bloccato la pubblicazione. L'ultimo file buono non è stato toccato.
           </p>
           <ul style={{margin:"0 0 12px",paddingLeft:18}}>
-            {(pending.safety?.blockers||[]).map((b,i)=><li key={i} style={{fontSize:12,color:"#f59e0b",marginBottom:4}}>{b}</li>)}
+            {(pending.safety?.blockers||[]).map((b,i)=><li key={i} style={{fontSize:12,color:"var(--warn)",marginBottom:4}}>{b}</li>)}
           </ul>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
             <Btn v="ok" onClick={()=>onPublish("promote",code)} disabled={acting} style={{fontSize:13}}>✓ Pubblica comunque</Btn>
@@ -2204,15 +2282,15 @@ function MarketBlock({code,config:c,data,tinfo,molti,generating,acting,saving,on
         <div style={{display:"flex",gap:8,marginBottom:14}}>
           {[["latest","📦 Ultimo pronto"],["pending","⏸️ In quarantena"]].map(([v,l])=>(
             <div key={v} onClick={()=>setView(v)} style={{padding:"8px 16px",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600,
-              border:view===v?"2px solid #6366f1":"2px solid var(--border)",background:view===v?"var(--bg-card)":"var(--bg-input)",
+              border:view===v?"2px solid var(--accent)":"2px solid var(--border)",background:view===v?"var(--bg-card)":"var(--bg-input)",
               color:view===v?"var(--accent-form)":"var(--text-label)"}}>{l}</div>
           ))}
         </div>
       )}
 
       {shown&&shown.stats&&!shown.records&&(
-        <Card accent="#ef4444">
-          <h4 style={{margin:"0 0 6px",color:"#ef4444"}}>⚠️ Risultato della versione precedente</h4>
+        <Card accent="var(--bad)">
+          <h4 style={{margin:"0 0 6px",color:"var(--bad)"}}>⚠️ Risultato della versione precedente</h4>
           <p style={{fontSize:12,color:"var(--text-muted)",margin:0,lineHeight:1.6}}>
             Questo risultato è stato salvato dalla versione precedente dell'app, che teneva il file
             in un altro formato. Le righe non sono rileggibili: premi “Genera adesso” prima di
@@ -2229,10 +2307,10 @@ function MarketBlock({code,config:c,data,tinfo,molti,generating,acting,saving,on
 
       {shown&&shown.stats&&(
         <div>
-          <Card accent={view==="pending"?"#f59e0b":"#10b981"}>
+          <Card accent={view==="pending"?"var(--warn)":"var(--ok)"}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
               <div>
-                <h4 style={{color:view==="pending"?"#f59e0b":"#10b981",margin:"0 0 4px"}}>
+                <h4 style={{color:view==="pending"?"var(--warn)":"var(--ok)",margin:"0 0 4px"}}>
                   {view==="pending"?"⏸️ File in quarantena":"✓ File pronto"}
                 </h4>
                 <div style={{fontSize:12,color:"var(--text-muted)"}}>
@@ -2295,13 +2373,13 @@ function AlertsPanel({onClose}){
   const unread=alerts.filter(a=>!a.read);
   const read=alerts.filter(a=>a.read);
 
-  const colorMap={error:"#ef4444",warning:"#f59e0b",info:"#6366f1"};
+  const colorMap={error:"var(--bad)",warning:"var(--warn)",info:"var(--accent)"};
   const bgMap={error:"var(--bl-bg)",warning:"#2a1a00",info:"var(--tier-bg)"};
 
   return(
     <div style={{position:"fixed",top:0,right:0,width:380,height:"100vh",background:"var(--bg-card)",borderLeft:"1px solid var(--border)",zIndex:1000,display:"flex",flexDirection:"column",boxShadow:"-4px 0 20px rgba(0,0,0,0.3)"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <h3 style={{margin:0,fontSize:16}}>🔔 Notifiche {unread.length>0&&<span style={{color:"#ef4444",fontSize:13}}>({unread.length} nuove)</span>}</h3>
+        <h3 style={{margin:0,fontSize:16}}>🔔 Notifiche {unread.length>0&&<span style={{color:"var(--bad)",fontSize:13}}>({unread.length} nuove)</span>}</h3>
         <div style={{display:"flex",gap:8}}>
           {unread.length>0&&<Btn v="ghost" onClick={()=>action({action:"read-all"})} style={{fontSize:11,padding:"4px 8px"}}>Segna tutte lette</Btn>}
           {read.length>0&&<Btn v="danger" onClick={()=>action({action:"clear"})} style={{fontSize:11,padding:"4px 8px"}}>Cancella lette</Btn>}
@@ -2328,8 +2406,8 @@ function AlertsPanel({onClose}){
   );
 }
 function ThemeToggle({theme,toggle}){
-  return<button onClick={toggle} title={theme==="dark"?"Light mode":"Dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
-    {theme==="dark"?"☀️":"🌙"}
+  return<button onClick={toggle} title={theme==="dark"?"Passa al tema chiaro":"Passa al tema scuro"} style={{width:30,height:30,display:"inline-flex",alignItems:"center",justifyContent:"center",background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:8,cursor:"pointer",fontSize:14,lineHeight:1,color:"var(--text)",transition:"border-color .15s"}}>
+    {theme==="dark"?"☀":"☾"}
   </button>;
 }
 
@@ -2416,40 +2494,44 @@ function App(){
   return(
     <div>
       {showAlerts&&<AlertsPanel onClose={()=>{setShowAlerts(false);fetch("/api/alerts").then(r=>r.json()).then(d=>setAlertCount((d||[]).filter(a=>!a.read).length)).catch(()=>{});}}/>}
-      <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
-        <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
-            <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}><span style={{color:"#6366f1"}}>▸</span> Amazon Inventory Converter <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>v6.1</span></h1>
-            <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Nuovo formato offerte Amazon • ASIN verificato • Quantità 0 al posto del purge • Guard-rail</p>
+      <div className="app-header" style={{padding:"14px 32px"}}>
+        <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16}}>
+          <div className="brandbox" style={{minWidth:0}}>
+            <h1 style={{margin:0,fontSize:19,fontWeight:600,letterSpacing:"-.022em"}}>Inventory Converter <span className="hdr-ver" style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>6.1</span></h1>
+            <p style={{margin:"2px 0 0",color:"var(--text-muted)",fontSize:12.5}}>Offerte Amazon · ASIN verificato · quantità 0 al posto del purge · guard-rail</p>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:11,color:{idle:"var(--text-muted)",syncing:"#f59e0b",synced:"#10b981",error:"#ef4444"}[syncStatus]}}>
-              {syncStatus==="syncing"&&"↑ sync..."}
-              {syncStatus==="synced"&&"✓ sync"}
-              {syncStatus==="error"&&"⚠ offline"}
+          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            <span className="hdr-sync" style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,color:"var(--text-muted)"}}>
+              <span style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:{idle:"var(--text-muted)",syncing:"var(--warn)",synced:"var(--ok)",error:"var(--bad)"}[syncStatus]}}/>
+              {syncStatus==="syncing"&&"sincronizzo"}
+              {syncStatus==="synced"&&"sincronizzato"}
+              {syncStatus==="error"&&"non in linea"}
+              {syncStatus==="idle"&&"in locale"}
             </span>
-            <a href="fatture.html" className="navlink" title="Sistema di fatturazione: parsing delle fatture Deldo, fattura attiva intracomunitaria, storico">🧾 Fatture</a>
+            <a href="fatture.html" className="navlink" title="Sistema di fatturazione: parsing delle fatture Deldo, fattura attiva intracomunitaria, storico">Fatture</a>
             <AlertBell onClick={()=>setShowAlerts(p=>!p)} count={alertCount}/>
             <ThemeToggle theme={theme} toggle={toggleTheme}/>
           </div>
         </div>
       </div>
-      <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
-        <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
-          {tabs.map(t=>(
-            <button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap"}}>
-              {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
-            </button>
-          ))}
+      <div className="app-tabs" style={{padding:"0 32px 12px"}}>
+        <div style={{maxWidth:1300,margin:"0 auto"}}>
+          <div className="segmented" role="tablist">
+            {tabs.map(t=>(
+              <button key={t.id} className="seg" role="tab" aria-selected={tab===t.id} onClick={()=>sTab(t.id)}>
+                {t.label}{t.n!==undefined&&<span className="segbadge">{t.n}</span>}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
         {errSync&&(
-          <Card accent="#ef4444" style={{marginBottom:14}}>
+          <Card accent="var(--bad)" style={{marginBottom:14}}>
             <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
               <span style={{fontSize:20}}>🛑</span>
               <div style={{flex:1}}>
-                <p style={{margin:0,color:"#ef4444",fontSize:13,lineHeight:1.6}}>{errSync}</p>
+                <p style={{margin:0,color:"var(--bad)",fontSize:13,lineHeight:1.6}}>{errSync}</p>
                 <div style={{marginTop:8}}><Btn v="ghost" onClick={()=>setErrSync(null)} style={{fontSize:11}}>Ho capito</Btn></div>
               </div>
             </div>
