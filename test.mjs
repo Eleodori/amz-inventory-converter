@@ -957,6 +957,43 @@ t("le righe senza ASIN a quantita' 0 non contano come righe in lotteria", () => 
   assert.ok(!/Sono EAN nuovi che il fornitore ha iniziato a mandare/.test(html), "il banner afferma ancora una causa non verificabile");
 });
 
+t("l'inventory rimanda alla pagina fatture, e le fatture tornano indietro", () => {
+  const idx = fs.readFileSync("index.html", "utf8");
+  assert.ok(/<a href="fatture\.html" className="navlink"/.test(idx), "manca il link alle fatture nell'header");
+  assert.ok(/\.navlink\{color:var\(--ghost-text\)/.test(idx), "manca lo stile .navlink");
+  // La regola non deve finire dentro la media query: ci era finita alla prima
+  // stesura e il pulsante restava senza bordo sopra i 600px.
+  const css = idx.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const iNav = css.indexOf(".navlink{"), iMedia = css.indexOf("@media(max-width:600px)");
+  assert.ok(iNav > 0 && iMedia > 0 && iNav < iMedia, ".navlink e' dentro la media query dei 600px");
+  assert.equal(css.split("{").length, css.split("}").length, "graffe del CSS non bilanciate");
+  const fat = fs.readFileSync("fatture.html", "utf8");
+  assert.ok(/<a href="index\.html" className="navlink"/.test(fat), "manca il ritorno all'inventory");
+  // Le due pagine usano chiavi localStorage diverse: l'archivio fatture non
+  // deve poter sovrascrivere la configurazione dell'inventory.
+  assert.ok(/const INV_KEY="gw-invoicing-v1"/.test(fat), "chiave dell'archivio fatture cambiata");
+  assert.ok(!/localStorage\.setItem\("amz-config/.test(fat), "la pagina fatture scrive sulla chiave dell'inventory");
+});
+
+t("l'archivio fatture si puo' esportare e reimportare", () => {
+  const fat = fs.readFileSync("fatture.html", "utf8");
+  assert.ok(/function ArchivioCard/.test(fat), "manca la scheda dell'archivio");
+  assert.ok(/download=`fatturazione_/.test(fat), "manca l'esportazione");
+  assert.ok(/_formato:"gw-invoicing-v1"/.test(fat), "l'esportazione non marca il formato");
+  assert.ok(/accept=".json"/.test(fat), "manca l'importazione");
+  // L'unione non deve duplicare ne' far tornare indietro la numerazione.
+  assert.ok(/numeri\.has\(String\(x\.number\)\)/.test(fat), "l'unione non deduplica per numero fattura");
+  assert.ok(/Math\.max\(Number\(inv\.lastInvoiceNumber\)/.test(fat), "la numerazione puo' tornare indietro");
+  // riproduzione della logica di unione, tenuta in sincrono col commento sopra
+  const unisci = (qui, dal) => {
+    const numeri = new Set(qui.map(x => String(x.number)));
+    return [...qui, ...dal.filter(x => !numeri.has(String(x.number)))];
+  };
+  const qui = [{ number: "2026/1" }, { number: "2026/2" }];
+  assert.equal(unisci(qui, [{ number: "2026/1" }, { number: "2026/2" }]).length, 2, "reimportare lo stesso file duplica");
+  assert.equal(unisci(qui, [{ number: "2026/7" }]).length, 3, "un archivio diverso non si unisce");
+});
+
 t("il tab ASIN offre la sostituzione della mappa, non solo l'unione", () => {
   const html = fs.readFileSync("index.html", "utf8");
   const tab = html.slice(html.indexOf("function AsinTab"), html.indexOf("// ─── Tab Regole") > 0 ? html.indexOf("// ─── Tab Regole") : html.indexOf("function RulesTab"));

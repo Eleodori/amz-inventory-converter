@@ -70,7 +70,10 @@ const DEFAULT_INV={
   ],
   lastInvoiceNumber:0,
   invoiceYear:new Date().getFullYear(),
-  invoices:[]
+  invoices:[],
+  noOrderRegistry:[],
+  paymentTerms:"immediate",
+  iban:""
 };
 
 // Azienda emittente — fissa
@@ -81,6 +84,17 @@ const ISSUER={
   country:"Lithuania",
   vat:"LT100019693812"
 };
+
+// Termini di pagamento: value -> {it: etichetta UI, en: testo in fattura}
+const PAYMENT_TERMS=[
+  {v:"immediate",it:"Immediato",en:"Immediate"},
+  {v:"15",it:"15 giorni",en:"15 days"},
+  {v:"30",it:"30 giorni",en:"30 days"},
+  {v:"60",it:"60 giorni",en:"60 days"},
+  {v:"90",it:"90 giorni",en:"90 days"}
+];
+function paymentTermsEn(v){const t=PAYMENT_TERMS.find(x=>x.v===String(v));return t?t.en:"Immediate"}
+function paymentTermsIt(v){const t=PAYMENT_TERMS.find(x=>x.v===String(v));return t?t.it:"Immediato"}
 
 function loadInv(){try{const v=JSON.parse(localStorage.getItem(INV_KEY));return v?{...DEFAULT_INV,...v}:DEFAULT_INV}catch{return DEFAULT_INV}}
 function persistInv(c){localStorage.setItem(INV_KEY,JSON.stringify(c))}
@@ -140,16 +154,25 @@ function parseDeldo(text){
       const addrBlock=addrM[1];
       // paesi noti da estrarre come terminatori/marker (case-insensitive)
       const countryRe=/^(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)$/i;
+      // Righe di footer/header Deldo che compaiono quando un ordine è spezzato
+      // su due pagine del PDF (es. "Pagina: 1/2", condizioni generali,
+      // intestazioni della pagina successiva). Vanno SCARTATE, non incluse
+      // nell'indirizzo, ma senza interrompere la raccolta (l'indirizzo può
+      // continuare dopo l'interruzione di pagina).
+      const junkRe=/Pagina:|condizioni generali|www\.deldo\.com|deldo\.com|FATTURA|Deldo Autobanden|Bureau & Magazijn|Essensteenweg|Brasschaat|Noorderlaan|Antwerpen|BE0413|544\.49\.49|info@deldo|Global Way LT MB|Nageviciaus|Vilnius|Lithuania|numero fattura|data fattura|BTW nummer|numero cliente|Quantità\s+Descrizione|prezzo\s+Totale|riserva di proprietà|lemerci consegnate|pagamento completo|difetti o danni|stesso giorno della consegna|didiritto interessi|risarcimento danni|diritto belga|Convezione di Vienna|prescrizione del 14 giugno|protocollo dell|tribunali di Anversa|giudice di pace|accettand[oe] la spedizione|acquirente conferma|LT\d{11}/i;
       const lines=[];
       for(const raw of addrBlock.split("\n")){
         const s=raw.trim();
         if(!s)continue;
         if(/^\d{1,3}\s+\d{2,3}\s+\d{2,3}/.test(s))break;
         if(/^\d+\s+DPD/i.test(s))break;
+        if(junkRe.test(s))continue;  // scarta footer/header, non interrompere
+        // scarta anche la riga meta fattura "26161301 24-08-2026 ..." della pagina successiva
+        if(/^\d{8}\s+\d{2}-\d{2}-\d{4}/.test(s))continue;
         lines.push(s);
       }
       const nameParts=[];let capCity="";let street="";let country="Italy";
-      const capRe=/(?:^|[\s\-])(\d{5}\s+\S.*)$/;
+      const capRe=/(?:^|\D)(\d{4,5}\s+\S.*)$/;
       // Riconoscimento via: italiano + tedesco + francese
       const streetRe=/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada|str(?:aße|aBe|asse)|rue|avenue|allee|boulevard|platz|weg|gasse|josefstrabe|.*stra[ßB]e|.*strasse)/i;
       for(const ln of lines){
@@ -159,7 +182,7 @@ function parseDeldo(text){
         // Esempio: "indirizzo di BROMURI Gianni -3401686821 - 48125 Frz.Mensa Matellica-RA"
         // Esempio: "Harun Topaloglu- 44536 Lunen"
         const capInLine=ln.match(capRe);
-        if(capInLine && !/^\d{5}\s/.test(ln)){
+        if(capInLine && !/^\d{4,5}\s/.test(ln)){
           const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
           const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
           let right=capInLine[1].trim();
@@ -171,7 +194,7 @@ function parseDeldo(text){
           continue;
         }
         // 3) riga "CAP città" da sola
-        if(/^\d{5}\s/.test(ln)){
+        if(/^\d{4,5}\s/.test(ln)){
           let v=ln;
           const rcm=v.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
           if(rcm){country=rcm[1];v=v.slice(0,rcm.index).trim()}
@@ -192,7 +215,7 @@ function parseDeldo(text){
       }
       capCity=capCity.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,"").trim();
       let fullName=nameParts.join(" ");
-      fullName=fullName.replace(/-?\s*\d{7,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
+      fullName=fullName.replace(/-?\s*\d{6,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
       order.client={name:fullName,street,city:capCity,country};
     }
 
@@ -259,6 +282,88 @@ function parseDeldo(text){
 }
 
 /* ==========================================================
+   PARSER REPORT ORDINI AMAZON (TSV)
+   Costruisce mappa: amazon-order-id -> {qty, itemPrice, product}
+   Ignora ordini Cancelled / senza prezzo.
+   ========================================================== */
+function parseAmazonReport(text){
+  const lines=text.split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length<2)return {orders:new Map(),rowCount:0};
+  const headers=lines[0].split("\t").map(h=>h.trim().toLowerCase());
+  const idx={
+    orderId:headers.indexOf("amazon-order-id"),
+    status:headers.indexOf("order-status"),
+    itemStatus:headers.indexOf("item-status"),
+    qty:headers.indexOf("quantity"),
+    price:headers.indexOf("item-price"),
+    product:headers.indexOf("product-name")
+  };
+  if(idx.orderId<0||idx.price<0)return {orders:new Map(),rowCount:0,error:"Colonne amazon-order-id / item-price non trovate. È il report ordini giusto?"};
+  const orders=new Map();
+  let rowCount=0;
+  for(let i=1;i<lines.length;i++){
+    const c=lines[i].split("\t");
+    const oid=(c[idx.orderId]||"").trim();
+    if(!oid)continue;
+    rowCount++;
+    const status=(idx.status>=0?c[idx.status]:"").trim().toLowerCase();
+    const qty=parseInt(c[idx.qty])||0;
+    const price=parseFloat(c[idx.price])||0;
+    // salta cancellati o righe senza prezzo/qty
+    if(status==="cancelled"||qty<=0||price<=0)continue;
+    const entry={qty,itemPrice:price,product:(idx.product>=0?c[idx.product]:"").trim()};
+    if(orders.has(oid)){
+      // stesso ordine su più righe: accumula (raro ma possibile)
+      const ex=orders.get(oid);
+      ex.qty+=qty;ex.itemPrice+=price;
+    }else{
+      orders.set(oid,entry);
+    }
+  }
+  return {orders,rowCount};
+}
+
+// Rileva se un ref è un Amazon order ID (formato XXX-XXXXXXX-XXXXXXX)
+function isAmazonOrderId(s){
+  return /^\d{3}-\d{7}-\d{7}$/.test((s||"").trim());
+}
+
+/* ==========================================================
+   GENERATORE ORDER ID FITTIZIO (formato Amazon: 409-XXXXXXX-XXXXXXX)
+   Prefisso 409- (formato identico agli ID Amazon).
+   DETERMINISTICO: derivato da fattura Deldo + ordine + articolo,
+   quindi rigenerando la stessa fattura l'ID non cambia e il
+   registro non accumula duplicati.
+   ========================================================== */
+function generatePseudoOrderId(seed){
+  let h1=0,h2=0;
+  for(let i=0;i<seed.length;i++){
+    h1=((h1<<5)-h1+seed.charCodeAt(i))|0;
+    h2=((h2<<7)-h2+seed.charCodeAt(i)*31+i)|0;
+  }
+  const a=String(Math.abs(h1)%10000000).padStart(7,"0");
+  const b=String(Math.abs(h2)%10000000).padStart(7,"0");
+  return `409-${a}-${b}`;
+}
+
+/* ==========================================================
+   RISOLUZIONE PREZZO DI VENDITA
+   1) Se ref1 è un Amazon order ID presente nel report ->
+      prezzo unitario = itemPrice Amazon / qty Amazon
+   2) Altrimenti -> costo Deldo + 10 EUR a pneumatico
+   ========================================================== */
+const FALLBACK_SURCHARGE=10;
+function resolveSellPrice(deldoUnitCost,deldoQty,ref1,amazonOrders){
+  if(amazonOrders && isAmazonOrderId(ref1)){
+    const entry=amazonOrders.get(ref1.trim());
+    if(entry && entry.qty>0){
+      return {unitPrice:entry.itemPrice/entry.qty,source:"amazon",amazonQty:entry.qty};
+    }
+  }
+  return {unitPrice:deldoUnitCost+FALLBACK_SURCHARGE,source:"fallback"};
+}
+
+/* ==========================================================
    UTILITIES
    ========================================================== */
 function applyMarkup(price,tiers){
@@ -303,6 +408,7 @@ function Btn({children,onClick,v="pri",style,disabled,type}){
 function GenerateTab({inv,saveInv}){
   // Lista di file caricati, ognuno con stato: {id, name, status:'parsing|ok|error', result, error}
   const[files,sFiles]=useState([]);
+  const[amazonReport,sAmazonReport]=useState(null); // {fileName, orders:Map, rowCount, usable}
   const[isDragging,sIsDragging]=useState(false);
   const[customerId,sCustomerId]=useState(inv.customers[0]?.id||"");
   const[invDate,sInvDate]=useState(todayIso());
@@ -329,10 +435,34 @@ function GenerateTab({inv,saveInv}){
     }
   };
 
-  // aggiunge una lista di File alla coda di upload
+  // carica il report ordini Amazon (.txt TSV)
+  const loadAmazonReport=(f)=>{
+    sGen(false);
+    const reader=new FileReader();
+    reader.onload=(e)=>{
+      try{
+        const parsed=parseAmazonReport(e.target.result);
+        if(parsed.error){
+          sAmazonReport({fileName:f.name,orders:new Map(),rowCount:0,usable:0,error:parsed.error});
+        }else{
+          sAmazonReport({fileName:f.name,orders:parsed.orders,rowCount:parsed.rowCount,usable:parsed.orders.size});
+        }
+      }catch(err){
+        console.error(err);
+        sAmazonReport({fileName:f.name,orders:new Map(),rowCount:0,usable:0,error:"Errore lettura report: "+err.message});
+      }
+    };
+    reader.readAsText(f,"utf-8");
+  };
+
+  // aggiunge una lista di File alla coda di upload (PDF Deldo + eventuale report .txt)
   const addFiles=async(fileList)=>{
     sGen(false);
-    const news=Array.from(fileList).filter(f=>f.name.toLowerCase().endsWith(".pdf"));
+    const all=Array.from(fileList);
+    // .txt / .tsv / .csv -> report Amazon (prende l'ultimo se più di uno)
+    const txts=all.filter(f=>/\.(txt|tsv|csv)$/i.test(f.name));
+    if(txts.length)loadAmazonReport(txts[txts.length-1]);
+    const news=all.filter(f=>f.name.toLowerCase().endsWith(".pdf"));
     if(!news.length)return;
     // crea entries placeholder con status "parsing"
     const placeholders=news.map((f,i)=>({
@@ -368,24 +498,36 @@ function GenerateTab({inv,saveInv}){
 
   const computed=useMemo(()=>{
     if(!okFiles.length)return null;
+    const amazonOrders=amazonReport&&!amazonReport.error?amazonReport.orders:null;
     const lines=[];
     let totalNet=0,totalGross=0,totalQty=0;
+    let matchedCount=0,fallbackCount=0;
     for(const f of okFiles){
       for(const ord of f.result.orders){
         for(const it of ord.items){
-          const unitMarked=applyMarkup(it.unitPrice,inv.markupTiers);
-          const lineTotal=unitMarked*it.quantity;
+          const resolved=resolveSellPrice(it.unitPrice,it.quantity,ord.ref1,amazonOrders);
+          const unitSell=resolved.unitPrice;
+          const lineTotal=unitSell*it.quantity;
           const cost=it.unitPrice*it.quantity;
           totalNet+=cost;totalGross+=lineTotal;totalQty+=it.quantity;
+          if(resolved.source==="amazon")matchedCount++;else fallbackCount++;
+          // Per righe senza order ID Amazon: genera ID fittizio deterministico
+          const generatedOrderId=resolved.source==="fallback"
+            ?generatePseudoOrderId(`${f.result.meta?.supplierInvNum||""}|${ord.orderId1}|${it.description}|${it.quantity}`)
+            :null;
           lines.push({
-            orderRef:ord.ref2,
+            orderRef:resolved.source==="amazon"?ord.ref1:generatedOrderId,
+            originalRef:ord.ref1,
+            generatedOrderId,
             sourceInvoice:f.result.meta?.supplierInvNum||null,
+            sourceInvoiceDate:f.result.meta?.supplierInvDate||null,
             clientName:ord.client.name,
             clientAddr:[ord.client.street,ord.client.city,ord.client.country].filter(Boolean).join(", "),
             quantity:it.quantity,
             description:it.description,
             unitCost:it.unitPrice,
-            unitPrice:unitMarked,
+            unitPrice:unitSell,
+            priceSource:resolved.source,
             lineTotal,
             cost
           });
@@ -401,8 +543,8 @@ function GenerateTab({inv,saveInv}){
       }
     }
     const supplierInvoices=[...supplierInvoicesMap.values()].sort((a,b)=>a.number.localeCompare(b.number));
-    return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet,supplierInvoices};
-  },[okFiles,inv.markupTiers]);
+    return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet,supplierInvoices,matchedCount,fallbackCount};
+  },[okFiles,amazonReport]);
 
   const customer=inv.customers.find(c=>String(c.id)===String(customerId));
 
@@ -434,12 +576,14 @@ function GenerateTab({inv,saveInv}){
     doc.line(15,42,pw-15,42);
     doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
     doc.text("INVOICE NUMBER",15,48);
-    doc.text("INVOICE DATE",70,48);
-    doc.text("ISSUER VAT NUMBER",125,48);
+    doc.text("INVOICE DATE",60,48);
+    doc.text("ISSUER VAT NUMBER",100,48);
+    doc.text("PAYMENT TERMS",152,48);
     doc.setTextColor(0);doc.setFont("helvetica","normal");doc.setFontSize(11);
     doc.text(effectiveInvNum,15,53);
-    doc.text(isoToIt(invDate),70,53);
-    doc.text(ISSUER.vat,125,53);
+    doc.text(isoToIt(invDate),60,53);
+    doc.text(ISSUER.vat,100,53);
+    doc.text(paymentTermsEn(inv.paymentTerms),152,53);
     doc.line(15,58,pw-15,58);
 
     // BILL TO
@@ -508,6 +652,11 @@ function GenerateTab({inv,saveInv}){
         noteLines.push(`Source invoices ref: ${supInvs.map(s=>s.number).join(", ")}`);
       }
     }
+    // IBAN per pagamento (se impostato nelle Impostazioni)
+    if(inv.iban && inv.iban.trim()){
+      noteLines.push("");
+      noteLines.push(`Payment by bank transfer - IBAN: ${inv.iban.trim()}`);
+    }
     // Pagina A4 = 210mm; margini 15mm per lato → larghezza utile 180mm.
     // splitTextToSize spezza ogni stringa in più righe se eccede la larghezza.
     const maxWidth=pw-30;
@@ -564,16 +713,44 @@ function GenerateTab({inv,saveInv}){
         quantity:l.quantity,description:l.description,
         clientName:l.clientName,clientAddr:l.clientAddr,
         sourceInvoice:l.sourceInvoice||null,
-        unitCost:l.unitCost,unitPrice:l.unitPrice,lineTotal:l.lineTotal
+        unitCost:l.unitCost,unitPrice:l.unitPrice,lineTotal:l.lineTotal,priceSource:l.priceSource||null,
+        generatedOrderId:l.generatedOrderId||null
       })),
       pdfBase64,
       createdAt:new Date().toISOString()
     };
     const filtered=(inv.invoices||[]).filter(x=>x.number!==effectiveInvNum);
     const newInvoices=[record,...filtered];
+
+    // ===== REGISTRO ORDINI SENZA NUMERO AMAZON =====
+    // Rimuovi eventuali voci precedenti di questa stessa fattura (caso rigenerazione),
+    // poi aggiungi le nuove voci per ogni riga fallback.
+    const registryKept=(inv.noOrderRegistry||[]).filter(x=>x.invoiceNumber!==effectiveInvNum);
+    const registryNew=computed.lines
+      .filter(l=>l.priceSource==="fallback")
+      .map(l=>({
+        id:l.generatedOrderId+"_"+effectiveInvNum,
+        generatedOrderId:l.generatedOrderId,
+        originalRef:l.originalRef||null,
+        supplierInvNum:l.sourceInvoice||null,
+        supplierInvDate:l.sourceInvoiceDate||null,
+        invoiceNumber:effectiveInvNum,
+        invoiceDate:invDate,
+        clientName:l.clientName,
+        clientAddr:l.clientAddr,
+        description:l.description,
+        quantity:l.quantity,
+        unitCost:l.unitCost,
+        unitPrice:l.unitPrice,
+        lineTotal:l.lineTotal,
+        createdAt:new Date().toISOString()
+      }));
+    const newRegistry=[...registryNew,...registryKept];
+
     const newState={
       ...inv,
       invoices:newInvoices,
+      noOrderRegistry:newRegistry,
       ...(invNumOverride.trim()||existing?{}:{lastInvoiceNumber:next.num,invoiceYear:next.year})
     };
     try{
@@ -592,8 +769,8 @@ function GenerateTab({inv,saveInv}){
 
   return<div>
     <Card>
-      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fatture passive (PDF Deldo)</h3>
-      <p style={{margin:"0 0 12px",color:"var(--text-muted)",fontSize:13}}>Puoi caricare uno o più PDF. Il sistema unirà tutte le righe in <strong>una sola fattura attiva</strong>.</p>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fatture passive (PDF Deldo) + report ordini Amazon (.txt)</h3>
+      <p style={{margin:"0 0 12px",color:"var(--text-muted)",fontSize:13}}>Carica uno o più PDF Deldo <strong>e</strong> il report ordini Amazon del periodo. Il prezzo di vendita di ogni riga viene preso dall'ordine Amazon corrispondente; se un ordine non è nel report, viene applicato il costo Deldo <strong>+{FALLBACK_SURCHARGE}€</strong> a pneumatico.</p>
 
       <label
         onDrop={onDrop}
@@ -607,11 +784,31 @@ function GenerateTab({inv,saveInv}){
         }}>
         <div style={{fontSize:32,marginBottom:6}}>{isDragging?"📥":"📄"}</div>
         <div style={{color:"var(--text)",fontWeight:600}}>
-          {isDragging?"Rilascia i PDF qui":"Trascina qui i PDF o clicca per selezionarli"}
+          {isDragging?"Rilascia i file qui":"Trascina qui PDF e report .txt o clicca per selezionarli"}
         </div>
-        <div style={{color:"var(--text-muted)",fontSize:12,marginTop:4}}>Selezione multipla supportata • Formato Deldo Autobanden NV (.pdf)</div>
-        <input type="file" accept=".pdf" multiple style={{display:"none"}} onChange={e=>{if(e.target.files?.length)addFiles(e.target.files);e.target.value=""}}/>
+        <div style={{color:"var(--text-muted)",fontSize:12,marginTop:4}}>Selezione multipla • Fatture Deldo (.pdf) • Report ordini Amazon (.txt)</div>
+        <input type="file" accept=".pdf,.txt,.tsv,.csv" multiple style={{display:"none"}} onChange={e=>{if(e.target.files?.length)addFiles(e.target.files);e.target.value=""}}/>
       </label>
+
+      {/* Stato report Amazon */}
+      <div style={{marginTop:12,padding:"10px 14px",borderRadius:8,
+        background:amazonReport?(amazonReport.error?"var(--bl-bg)":"var(--bg-input)"):"var(--bg-input)",
+        border:"1px solid "+(amazonReport?(amazonReport.error?"var(--bl-border)":"#10b981"):"var(--border-input)")}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:14}}>{amazonReport?(amazonReport.error?"❌":"🛒"):"🛒"}</span>
+              <strong style={{color:"var(--text)",fontSize:13}}>
+                {amazonReport?("Report Amazon: "+amazonReport.fileName):"Report ordini Amazon: non caricato"}
+              </strong>
+            </div>
+            {amazonReport&&!amazonReport.error&&<div style={{color:"#10b981",fontSize:11,marginTop:3}}>✓ {amazonReport.usable} ordini validi su {amazonReport.rowCount} righe (esclusi cancellati)</div>}
+            {amazonReport&&amazonReport.error&&<div style={{color:"var(--bl-text)",fontSize:11,marginTop:3}}>{amazonReport.error}</div>}
+            {!amazonReport&&<div style={{color:"#f59e0b",fontSize:11,marginTop:3}}>⚠️ Senza report, TUTTE le righe useranno il fallback costo Deldo +{FALLBACK_SURCHARGE}€</div>}
+          </div>
+          {amazonReport&&<Btn v="danger" onClick={()=>{sAmazonReport(null);sGen(false)}} style={{fontSize:11,padding:"4px 10px"}}>✕</Btn>}
+        </div>
+      </div>
 
       {files.length>0&&<div style={{marginTop:12}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -673,7 +870,18 @@ function GenerateTab({inv,saveInv}){
           <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
           <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.margin)}</div>
         </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Prezzi Amazon</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>{computed.matchedCount}</div>
+        </div>
+        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>Fallback +{FALLBACK_SURCHARGE}€</div>
+          <div style={{fontSize:18,fontWeight:700,color:computed.fallbackCount>0?"#f59e0b":"var(--text)"}}>{computed.fallbackCount}</div>
+        </div>
       </div>
+      {computed.fallbackCount>0&&<div style={{marginBottom:12,padding:"8px 12px",background:"var(--bg-input)",border:"1px solid #f59e0b",borderRadius:8,fontSize:12,color:"var(--text)"}}>
+        ⚠️ {computed.fallbackCount} {computed.fallbackCount===1?"riga non ha":"righe non hanno"} trovato l'ordine Amazon: prezzo = costo Deldo +{FALLBACK_SURCHARGE}€. Righe evidenziate in tabella.
+      </div>}
       <div style={{maxHeight:280,overflowY:"auto",border:"1px solid var(--border)",borderRadius:8}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
           <thead style={{background:"var(--bg-input)",position:"sticky",top:0}}>
@@ -684,17 +892,26 @@ function GenerateTab({inv,saveInv}){
               {okFiles.length>1&&<th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Fattura</th>}
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Acquisto</th>
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Vendita</th>
+              <th style={{padding:8,textAlign:"center",color:"var(--text-label)"}}>Fonte</th>
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
             </tr>
           </thead>
           <tbody>
-            {computed.lines.map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)"}}>
+            {computed.lines.map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)",background:l.priceSource==="fallback"?"rgba(245,158,11,.08)":"transparent"}}>
               <td style={{padding:8}}>{l.quantity}</td>
               <td style={{padding:8}}>{l.description}</td>
               <td style={{padding:8,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
               {okFiles.length>1&&<td style={{padding:8,fontSize:11,color:"var(--text-muted)"}}>{l.sourceInvoice||"—"}</td>}
               <td style={{padding:8,textAlign:"right",color:"var(--text-muted)"}}>€ {fmtEur(l.unitCost)}</td>
               <td style={{padding:8,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
+              <td style={{padding:8,textAlign:"center"}}>
+                {l.priceSource==="amazon"
+                  ?<span style={S.badge("var(--badge-ok)")} title={"Ordine Amazon "+l.orderRef}>🛒 Amazon</span>
+                  :<div>
+                    <span style={S.badge("var(--badge-warn)")} title="Ordine non trovato nel report: ID generato">+{FALLBACK_SURCHARGE}€</span>
+                    <div style={{fontSize:9,fontFamily:"monospace",color:"var(--text-muted)",marginTop:3}}>{l.generatedOrderId}</div>
+                  </div>}
+              </td>
               <td style={{padding:8,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
             </tr>)}
           </tbody>
@@ -732,9 +949,16 @@ function GenerateTab({inv,saveInv}){
    ========================================================== */
 function HistoryTab({inv,saveInv}){
   const invoices=inv.invoices||[];
+  const registry=inv.noOrderRegistry||[];
   const[query,sQuery]=useState("");
   const[yearFilter,sYearFilter]=useState("all");
   const[expanded,sExpanded]=useState(null);
+  const[showRegistry,sShowRegistry]=useState(false);
+
+  const removeRegistryEntry=(id)=>{
+    if(!confirm("Rimuovere questa voce dal registro ordini senza numero Amazon?"))return;
+    saveInv({...inv,noOrderRegistry:registry.filter(x=>x.id!==id)});
+  };
 
   const storageInfo=useMemo(()=>{
     try{
@@ -809,6 +1033,53 @@ function HistoryTab({inv,saveInv}){
       </div>
       {invoices.length>0&&<Btn v="danger" onClick={clearAll} style={{fontSize:12}}>Svuota storico</Btn>}
     </div>
+
+    {/* ===== REGISTRO ORDINI SENZA NUMERO AMAZON ===== */}
+    <Card style={{padding:0,overflow:"hidden",border:registry.length>0?"1px solid #f59e0b":"1px solid var(--border)"}}>
+      <div onClick={()=>sShowRegistry(!showRegistry)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:16}}>🏷️</span>
+          <div>
+            <strong style={{color:"var(--text)",fontSize:14}}>Ordini senza numero Amazon</strong>
+            <span style={{...S.badge(registry.length>0?"var(--badge-warn)":"var(--badge-neutral)"),marginLeft:8}}>{registry.length}</span>
+            <div style={{fontSize:11,color:"var(--text-muted)",marginTop:2}}>Ordini con ID generato internamente (prefisso 409-), tracciati con fattura fornitore e fattura emessa.</div>
+          </div>
+        </div>
+        <span style={{color:"var(--text-muted)",fontSize:12}}>{showRegistry?"▲":"▼"}</span>
+      </div>
+      {showRegistry&&<div style={{borderTop:"1px solid var(--border)",padding:"14px 18px",background:"var(--bg-input)"}}>
+        {registry.length===0?
+          <p style={{color:"var(--text-muted)",margin:0,fontSize:13,textAlign:"center"}}>Nessun ordine senza numero Amazon. Le voci compaiono qui automaticamente quando generi una fattura contenente righe col fallback +{FALLBACK_SURCHARGE}€.</p>
+          :<div style={{maxHeight:320,overflowY:"auto",border:"1px solid var(--border)",borderRadius:6}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
+              <thead style={{background:"var(--bg-card)",position:"sticky",top:0}}>
+                <tr>
+                  <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>ID generato</th>
+                  <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Spedizione</th>
+                  <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
+                  <th style={{padding:6,textAlign:"center",color:"var(--text-label)"}}>Q.tà</th>
+                  <th style={{padding:6,textAlign:"right",color:"var(--text-label)"}}>Vendita</th>
+                  <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Fatt. Deldo</th>
+                  <th style={{padding:6,textAlign:"left",color:"var(--text-label)"}}>Nostra fattura</th>
+                  <th style={{padding:6}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {registry.map(r=><tr key={r.id} style={{borderTop:"1px solid var(--border)"}}>
+                  <td style={{padding:6,fontFamily:"monospace",fontSize:10.5,whiteSpace:"nowrap"}}>{r.generatedOrderId}</td>
+                  <td style={{padding:6}}><div style={{fontWeight:600}}>{r.clientName}</div><div style={{color:"var(--text-muted)",fontSize:10.5}}>{r.clientAddr}</div></td>
+                  <td style={{padding:6}}>{r.description}</td>
+                  <td style={{padding:6,textAlign:"center"}}>{r.quantity}</td>
+                  <td style={{padding:6,textAlign:"right",whiteSpace:"nowrap"}}>€ {fmtEur(r.unitPrice)}/pz<div style={{color:"var(--text-muted)",fontSize:10.5}}>tot € {fmtEur(r.lineTotal)}</div></td>
+                  <td style={{padding:6,whiteSpace:"nowrap"}}>{r.supplierInvNum||"—"}{r.supplierInvDate&&<div style={{color:"var(--text-muted)",fontSize:10.5}}>{r.supplierInvDate}</div>}</td>
+                  <td style={{padding:6,whiteSpace:"nowrap"}}><strong>{r.invoiceNumber}</strong><div style={{color:"var(--text-muted)",fontSize:10.5}}>{isoToIt(r.invoiceDate)}</div></td>
+                  <td style={{padding:6}}><Btn v="danger" onClick={()=>removeRegistryEntry(r.id)} style={{fontSize:10,padding:"3px 8px"}}>✕</Btn></td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>}
+      </div>}
+    </Card>
 
     {invoices.length===0?
       <Card><p style={{color:"var(--text-muted)",textAlign:"center",margin:0}}>Nessuna fattura emessa. Vai su "Genera fattura" per crearne una.</p></Card>
@@ -997,7 +1268,7 @@ function MarkupTab({inv,saveInv}){
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div>
         <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Regole ricarico per fascia di prezzo</h3>
-        <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Il prezzo di acquisto del pneumatico determina la fascia, e quindi il ricarico applicato.</p>
+        <p style={{margin:"4px 0 0",color:"#f59e0b",fontSize:13}}>⚠️ Non più usate per la generazione fatture: i prezzi di vendita vengono ora presi dal report ordini Amazon (fallback: costo Deldo +{FALLBACK_SURCHARGE}€). Questa tab resta solo come archivio configurazione.</p>
       </div>
       <Btn onClick={add}>+ Fascia</Btn>
     </div>
@@ -1043,7 +1314,15 @@ function MarkupTab({inv,saveInv}){
 function SettingsTab({inv,saveInv}){
   const[year,sYear]=useState(inv.invoiceYear);
   const[num,sNum]=useState(inv.lastInvoiceNumber);
+  const[terms,sTerms]=useState(inv.paymentTerms||"immediate");
+  const[iban,sIban]=useState(inv.iban||"");
   const sv=()=>{saveInv({...inv,invoiceYear:parseInt(year)||new Date().getFullYear(),lastInvoiceNumber:parseInt(num)||0});alert("Salvato.")};
+  const svPay=()=>{
+    const cleanIban=iban.trim().replace(/\s+/g," ");
+    saveInv({...inv,paymentTerms:terms,iban:cleanIban});
+    sIban(cleanIban);
+    alert("Impostazioni pagamento salvate.");
+  };
   const reset=()=>{if(confirm("Reset numerazione a 0?"))saveInv({...inv,invoiceYear:new Date().getFullYear(),lastInvoiceNumber:0})};
   const next=nextInvoiceNumber(inv);
   return<div>
@@ -1061,6 +1340,17 @@ function SettingsTab({inv,saveInv}){
       </div>
     </Card>
     <Card>
+      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Pagamento</h4>
+      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 12px"}}>Il termine di pagamento compare <strong>in cima alla fattura</strong> ("Payment terms"); l'IBAN compare <strong>in fondo</strong> ("Payment by bank transfer - IBAN: ...").</p>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:"0 14px"}}>
+        <Sel label="Termine di pagamento" value={terms} onChange={e=>sTerms(e.target.value)} options={PAYMENT_TERMS.map(t=>({v:t.v,l:t.it+" (in fattura: \""+t.en+"\")"}))}/>
+        <Inp label="IBAN (lascia vuoto per non mostrarlo)" value={iban} onChange={e=>sIban(e.target.value)} placeholder="es. LT12 3456 7890 1234 5678"/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <Btn v="ok" onClick={svPay}>Salva pagamento</Btn>
+      </div>
+    </Card>
+    <Card>
       <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Dati azienda emittente</h4>
       <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 8px"}}>Dati fissi impostati nel codice (oggetto <code style={{background:"var(--bg-input)",padding:"1px 5px",borderRadius:4}}>ISSUER</code>).</p>
       <div style={{background:"var(--bg-input)",padding:"12px 14px",borderRadius:8,fontSize:13}}>
@@ -1071,7 +1361,109 @@ function SettingsTab({inv,saveInv}){
         <div style={{marginTop:6}}><span style={S.badge("var(--badge-info)")}>VAT: {ISSUER.vat}</span></div>
       </div>
     </Card>
+    <ArchivioCard inv={inv} saveInv={saveInv}/>
   </div>
+}
+
+/* ==========================================================
+   ARCHIVIO — esportazione e importazione
+   Clienti, fatture, ricariche e numerazione stanno in localStorage,
+   che e' legato all'ORIGINE: aprire la pagina da un indirizzo diverso
+   (file:// oppure il sito) mostra un archivio diverso, e un "cancella
+   dati di navigazione" lo porta via senza copia di riserva. Da qui si
+   scarica tutto in un JSON e si rimette dove serve.
+   ========================================================== */
+function ArchivioCard({inv,saveInv}){
+  const[msg,sMsg]=useState(null);
+  const[err,sErr]=useState(null);
+  const conta={fatture:(inv.invoices||[]).length,clienti:(inv.customers||[]).length,fasce:(inv.markupTiers||[]).length};
+  const peso=(()=>{try{return new Blob([JSON.stringify(inv)]).size/1024}catch{return 0}})();
+
+  const esporta=()=>{
+    sErr(null);sMsg(null);
+    try{
+      const dump={_formato:"gw-invoicing-v1",_esportato:new Date().toISOString(),_origine:location.origin||"file://",dati:inv};
+      const blob=new Blob([JSON.stringify(dump,null,2)],{type:"application/json"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;
+      a.download=`fatturazione_${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+      sMsg(`Scaricato: ${conta.fatture} fatture, ${conta.clienti} clienti, ${conta.fasce} fasce.`);
+    }catch(e){sErr("Esportazione non riuscita: "+e.message)}
+  };
+
+  const importa=async(file,unisci)=>{
+    if(!file)return;
+    sErr(null);sMsg(null);
+    try{
+      const txt=await file.text();
+      const j=JSON.parse(txt);
+      const dati=j&&j.dati?j.dati:j;   // accetta anche il JSON grezzo della chiave
+      if(!dati||typeof dati!=="object")throw new Error("il file non contiene un archivio riconoscibile");
+      if(!Array.isArray(dati.invoices)||!Array.isArray(dati.customers))
+        throw new Error("mancano le liste fatture/clienti: non e' un archivio di questa pagina");
+      if(!unisci){
+        if(!confirm(`Sostituire l'archivio di questo browser con quello del file?\n\nAdesso: ${conta.fatture} fatture, ${conta.clienti} clienti.\nNel file: ${dati.invoices.length} fatture, ${dati.customers.length} clienti.\n\nQuello che c'e' adesso viene perso.`))return;
+        saveInv({...DEFAULT_INV,...dati});
+        sMsg(`Archivio sostituito: ${dati.invoices.length} fatture, ${dati.customers.length} clienti.`);
+        return;
+      }
+      // Unione: le fatture si riconoscono dal numero, i clienti dalla P.IVA
+      // (o dal nome se manca). Cosi' reimportare lo stesso file non duplica.
+      const numeri=new Set((inv.invoices||[]).map(x=>String(x.number)));
+      const nuoveFatture=(dati.invoices||[]).filter(x=>!numeri.has(String(x.number)));
+      const chiave=c=>String(c.vat||c.name||"").trim().toUpperCase();
+      const chiavi=new Set((inv.customers||[]).map(chiave));
+      const nuoviClienti=(dati.customers||[]).filter(c=>!chiavi.has(chiave(c)));
+      const maxNum=[...(inv.invoices||[]),...nuoveFatture]
+        .map(x=>parseInt(String(x.number).split("/").pop(),10)||0)
+        .reduce((a,b)=>Math.max(a,b),0);
+      saveInv({
+        ...inv,
+        invoices:[...(inv.invoices||[]),...nuoveFatture],
+        customers:[...(inv.customers||[]),...nuoviClienti],
+        // La numerazione non deve tornare indietro: si tiene il massimo.
+        lastInvoiceNumber:Math.max(Number(inv.lastInvoiceNumber)||0,Number(dati.lastInvoiceNumber)||0,maxNum),
+      });
+      sMsg(`Unite ${nuoveFatture.length} fatture e ${nuoviClienti.length} clienti`+
+        `${(dati.invoices||[]).length-nuoveFatture.length?`. ${(dati.invoices||[]).length-nuoveFatture.length} fatture erano gia' presenti e non sono state duplicate`:""}.`);
+    }catch(e){sErr("Importazione non riuscita: "+e.message)}
+  };
+
+  return<Card>
+    <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Archivio: copia di riserva e trasferimento</h4>
+    <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 12px",lineHeight:1.6}}>
+      Fatture, clienti e numerazione stanno nel <strong>browser di questo computer</strong>, legati
+      all'indirizzo da cui apri la pagina: aprirla dal sito invece che dal file mostra un archivio
+      diverso, e un "cancella dati di navigazione" lo cancella senza copia. Scarica il JSON per
+      portarlo altrove e per tenerne una copia.
+    </p>
+    <div style={{background:"var(--bg-input)",padding:"10px 14px",borderRadius:8,fontSize:13,marginBottom:12}}>
+      {conta.fatture} fatture · {conta.clienti} clienti · {conta.fasce} fasce di ricarico · {peso.toFixed(0)} KB
+      <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>origine attuale: <code>{location.origin||"file://"}</code></div>
+    </div>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+      <Btn v="ok" onClick={esporta}>⬇ Esporta archivio (JSON)</Btn>
+      <label style={{padding:"8px 16px",borderRadius:8,border:"1px solid var(--ghost-border)",color:"var(--ghost-text)",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+        ⬆ Importa e unisci
+        <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{importa(e.target.files[0],true);e.target.value=""}}/>
+      </label>
+      <label style={{padding:"8px 16px",borderRadius:8,border:"1px solid var(--bl-border)",color:"var(--bl-text)",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+        ⬆ Importa e sostituisci
+        <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{importa(e.target.files[0],false);e.target.value=""}}/>
+      </label>
+    </div>
+    <p style={{margin:"10px 0 0",fontSize:11,color:"var(--text-muted)",lineHeight:1.6}}>
+      <strong>Unisci</strong> aggiunge solo le fatture con un numero che qui non c'e' e i clienti con
+      una P.IVA che qui non c'e': reimportare lo stesso file due volte non duplica niente, e la
+      numerazione non torna indietro. <strong>Sostituisci</strong> butta l'archivio di questo browser
+      e mette quello del file.
+    </p>
+    {msg&&<p style={{margin:"10px 0 0",fontSize:13,color:"#10b981"}}>✓ {msg}</p>}
+    {err&&<p style={{margin:"10px 0 0",fontSize:13,color:"#ef4444"}}>❌ {err}</p>}
+  </Card>
 }
 
 /* ==========================================================

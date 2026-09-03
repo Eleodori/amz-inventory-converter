@@ -45,6 +45,8 @@ body{background:var(--bg);color:var(--text)}
 @media(min-width:1024px){.app-content{max-width:960px!important}}
 @media(min-width:1280px){.app-content{max-width:1100px!important}}
 @media(min-width:1536px){.app-content{max-width:1300px!important}}
+.navlink{color:var(--ghost-text);text-decoration:none;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--ghost-border);transition:all .15s}
+.navlink:hover{background:var(--bg-input)}
 @media(max-width:600px){.app-header{padding:14px 16px!important}.app-tabs{padding:0 12px!important}.app-content{padding:16px!important}}
 </style>
 </head>
@@ -2426,6 +2428,7 @@ function App(){
               {syncStatus==="synced"&&"✓ sync"}
               {syncStatus==="error"&&"⚠ offline"}
             </span>
+            <a href="fatture.html" className="navlink" title="Sistema di fatturazione: parsing delle fatture Deldo, fattura attiva intracomunitaria, storico">🧾 Fatture</a>
             <AlertBell onClick={()=>setShowAlerts(p=>!p)} count={alertCount}/>
             <ThemeToggle theme={theme} toggle={toggleTheme}/>
           </div>
