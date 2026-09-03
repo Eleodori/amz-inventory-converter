@@ -957,6 +957,46 @@ t("le righe senza ASIN a quantita' 0 non contano come righe in lotteria", () => 
   assert.ok(!/Sono EAN nuovi che il fornitore ha iniziato a mandare/.test(html), "il banner afferma ancora una causa non verificabile");
 });
 
+t("le due pagine condividono lo stesso design", () => {
+  const idx = fs.readFileSync("index.html", "utf8");
+  const fat = fs.readFileSync("fatture.html", "utf8");
+  // Sono collegate da un pulsante: passare dall'una all'altra non deve
+  // sembrare di cambiare programma.
+  for (const [nome, html] of [["index.html", idx], ["fatture.html", fat]]) {
+    assert.ok(/--font:-apple-system/.test(html), nome + ": manca il carattere di sistema");
+    assert.ok(/--accent-fill:/.test(html), nome + ": manca la tavolozza nuova");
+    assert.ok(/class="segmented"|className="segmented"/.test(html), nome + ": i tab non sono un controllo segmentato");
+    assert.ok(/boxShadow:"var\(--shadow\)"/.test(html), nome + ": le card non usano l'ombra del tema");
+    assert.ok(!/textTransform:"uppercase"/.test(html), nome + ": restano etichette in maiuscolo spaziato");
+    for (const hex of ["#6366f1", "#10b981", "#ef4444", "#f59e0b"])
+      assert.ok(!html.includes(hex), nome + ": il colore " + hex + " e' ancora scritto a mano");
+  }
+  // Le variabili di tema devono essere le stesse in entrambe, altrimenti una
+  // delle due pagine deriva col tempo.
+  const vars = html => {
+    const b = html.match(/body\[data-theme="dark"\]\{([\s\S]*?)\}/)[1];
+    return [...b.matchAll(/(--[\w-]+):/g)].map(m => m[1]).sort().join(",");
+  };
+  assert.equal(vars(fat), vars(idx), "le variabili del tema scuro sono diverse fra le due pagine");
+});
+
+t("nessuna emoji pittografica nell'interfaccia", () => {
+  // Restano ammessi solo i segni tipografici monocromatici, elencati qui:
+  // sono simboli, non figurine, e nel carattere di sistema si compongono col testo.
+  const ammessi = "\u2713\u2715\u26a0\u2600\u263e\u2193\u2191\u2190\u2192\u21bb\u25b2\u25bc\u2500\u00b7";
+  const pict = new RegExp("[\\u{1F000}-\\u{1FAFF}\\u{2B00}-\\u{2BFF}\\u{23E9}-\\u{23FA}\\u{2600}-\\u{27BF}\\u{FE0F}]", "u");
+  const filtra = l => [...l].filter(ch => pict.test(ch) && !ammessi.includes(ch)).join("");
+  for (const f of ["index.html", "fatture.html"]) {
+    const html = fs.readFileSync(f, "utf8");
+    const dentro = html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/)[1];
+    const righe = dentro.split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .map(l => filtra(l))
+      .filter(Boolean);
+    assert.deepEqual(righe, [], f + ": restano emoji nell'interfaccia");
+  }
+});
+
 t("il design non ha piu' colori scritti a mano nei componenti", () => {
   const html = fs.readFileSync("index.html", "utf8");
   // I quattro colori dell'app vecchia erano ripetuti 85 volte come esadecimali:

@@ -12,38 +12,103 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+/* ─────────────────────────────────────────────────────────────────────────────
+   I nomi delle variabili sono quelli di prima (--bg-card, --border, ...):
+   centinaia di stili inline nei componenti li usano, e ripuntarli qui cambia
+   faccia a tutta l'app senza toccare una riga di logica.
+   ───────────────────────────────────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'DM Sans',sans-serif;min-height:100vh;transition:background .2s,color .2s}
-::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg-card)}::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:3px}
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
+  --radius:14px;--radius-sm:9px;
+}
+body{
+  font-family:var(--font);min-height:100vh;font-size:15px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;transition:background .2s,color .2s;
+}
+/* Cifre a larghezza fissa: le colonne di numeri si allineano davvero */
+.num,input[type=number]{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:5px;border:2px solid var(--bg)}
+
 body[data-theme="dark"]{
---bg:#0f0f1e;--bg-card:#1a1a2e;--bg-input:#0f0f1e;--bg-stat:#0f0f1e;
---bg-header-start:#1a1a3e;--bg-header-end:#0f0f1e;
---border:#2a2a4a;--border-input:#3a3a5a;
---text:#e0e0f0;--text-muted:#5a5a7a;--text-label:#7a7a9a;
---tab-active:#a5b4fc;--tab-inactive:#5a5a7a;--tab-badge:#2a2a4a;
---ghost-border:#3a3a5a;--ghost-text:#8888cc;
---badge-info:#1e3a5f;--badge-ok:#065f46;--badge-neutral:#334155;--badge-warn:#78350f;
---bl-bg:#2a1a1a;--bl-border:#5a2a2a;--bl-text:#f87171;
---accent-form:#a5b4fc;
+--bg:#000000;--bg-card:#1c1c1e;--bg-input:#2c2c2e;--bg-stat:#1c1c1e;
+--bg-header-start:#000000;--bg-header-end:#000000;
+--border:rgba(255,255,255,.11);--border-input:rgba(255,255,255,.16);
+--text:#f5f5f7;--text-muted:#a1a1a6;--text-label:#a1a1a6;
+--accent:#0a84ff;--accent-fill:#0060d0;--accent-weak:rgba(10,132,255,.16);
+--tab-active:#f5f5f7;--tab-inactive:#a1a1a6;--tab-badge:rgba(10,132,255,.18);
+--tab-bg:#161618;--tab-sel:#2c2c2e;
+--ghost-border:rgba(255,255,255,.16);--ghost-text:#0a84ff;
+--badge-info:rgba(10,132,255,.16);--badge-ok:rgba(50,213,116,.16);--badge-neutral:rgba(255,255,255,.09);--badge-warn:rgba(255,179,64,.16);
+--ok:#32d574;--warn:#ffb340;--bad:#ff6961;
+--bl-bg:rgba(255,105,97,.12);--bl-border:rgba(255,105,97,.28);--bl-text:#ff8a82;
+--accent-form:#0a84ff;
+--tier-bg:#2c2c2e;--tier-border:rgba(255,255,255,.11);
+--info-bg:rgba(50,213,116,.10);--info-border:rgba(50,213,116,.22);--info-text:#e6f6ec;
+--chart-bar:#0a84ff;--chart-bar2:#32d574;--chart-grid:rgba(255,255,255,.11);
+--shadow:0 1px 2px rgba(0,0,0,.5);
 }
 body[data-theme="light"]{
---bg:#f4f4f8;--bg-card:#ffffff;--bg-input:#f0f0f5;--bg-stat:#f0f0f5;
---bg-header-start:#e8e8f4;--bg-header-end:#f4f4f8;
---border:#dcdce6;--border-input:#c8c8d6;
---text:#1a1a2e;--text-muted:#6a6a8a;--text-label:#5a5a7a;
---tab-active:#4f46e5;--tab-inactive:#8a8aaa;--tab-badge:#e0e0ea;
---ghost-border:#c8c8d6;--ghost-text:#4f46e5;
---badge-info:#dbeafe;--badge-ok:#d1fae5;--badge-neutral:#e2e8f0;--badge-warn:#fed7aa;
---bl-bg:#fef2f2;--bl-border:#fecaca;--bl-text:#dc2626;
---accent-form:#4f46e5;
+--bg:#f5f5f7;--bg-card:#ffffff;--bg-input:#fafafa;--bg-stat:#ffffff;
+--bg-header-start:#f5f5f7;--bg-header-end:#f5f5f7;
+--border:rgba(0,0,0,.09);--border-input:rgba(0,0,0,.13);
+--text:#1d1d1f;--text-muted:#6e6e73;--text-label:#6e6e73;
+--accent:#0071e3;--accent-fill:#0071e3;--accent-weak:rgba(0,113,227,.10);
+--tab-active:#1d1d1f;--tab-inactive:#6e6e73;--tab-badge:rgba(0,113,227,.10);
+--tab-bg:#ececee;--tab-sel:#ffffff;
+--ghost-border:rgba(0,0,0,.13);--ghost-text:#0071e3;
+--badge-info:rgba(0,113,227,.10);--badge-ok:rgba(29,143,78,.10);--badge-neutral:rgba(0,0,0,.06);--badge-warn:rgba(255,159,10,.14);
+--ok:#1d8f4e;--warn:#a8620a;--bad:#c9262c;
+--bl-bg:rgba(201,38,44,.07);--bl-border:rgba(201,38,44,.20);--bl-text:#c9262c;
+--accent-form:#0071e3;
+--tier-bg:#fafafa;--tier-border:rgba(0,0,0,.09);
+--info-bg:rgba(29,143,78,.07);--info-border:rgba(29,143,78,.18);--info-text:#1d1d1f;
+--chart-bar:#0071e3;--chart-bar2:#1d8f4e;--chart-grid:rgba(0,0,0,.09);
+--shadow:0 1px 2px rgba(0,0,0,.04), 0 6px 20px -8px rgba(0,0,0,.10);
 }
 body{background:var(--bg);color:var(--text)}
+
+/* Header: a filo e traslucido, senza gradiente */
+.app-header{
+  position:sticky;top:0;z-index:20;
+  background:color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+}
+/* Tab: un controllo segmentato al posto di nove sottolineature */
+.app-tabs{position:sticky;top:57px;z-index:19;background:color-mix(in srgb, var(--bg) 80%, transparent);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px)}
+.segmented{display:flex;gap:2px;padding:3px;overflow-x:auto;background:var(--tab-bg);border:1px solid var(--border);border-radius:11px;scrollbar-width:none}
+.segmented::-webkit-scrollbar{display:none}
+.seg{flex:0 0 auto;border:0;background:none;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:500;color:var(--tab-inactive);padding:7px 13px;border-radius:8px;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;transition:color .15s,background .15s}
+.seg:hover{color:var(--tab-active)}
+.seg[aria-selected="true"]{background:var(--tab-sel);color:var(--tab-active);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.seg .segbadge{font-size:11px;font-weight:600;padding:1px 6px;border-radius:20px;background:var(--tab-badge);color:var(--accent)}
+
+/* Campi: il focus si vede, e non con un bordo blu spesso */
+.f:focus{outline:none;border-color:var(--accent)!important;box-shadow:0 0 0 3.5px var(--accent-weak)}
+
+.navlink{color:var(--ghost-text);text-decoration:none;font-size:13px;font-weight:500;padding:0 11px;height:30px;display:inline-flex;align-items:center;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);transition:border-color .15s,background .15s}
+.navlink:hover{border-color:var(--border-input)}
+
 @media(min-width:1024px){.app-content{max-width:960px!important}}
 @media(min-width:1280px){.app-content{max-width:1100px!important}}
 @media(min-width:1536px){.app-content{max-width:1300px!important}}
-@media(max-width:600px){.app-header{padding:14px 16px!important}.app-tabs{padding:0 12px!important}.app-content{padding:16px!important}}
-.navlink{color:var(--ghost-text);text-decoration:none;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--ghost-border);transition:all .15s}
-.navlink:hover{background:var(--bg-input)}
+@media(max-width:760px){
+  .app-header{padding:12px 16px!important}
+  .app-tabs{padding:0 16px 10px!important;top:53px}
+  .app-content{padding:16px!important}
+  /* Il titolo si accorcia invece di finire sotto i pulsanti */
+  .brandbox{overflow:hidden}
+  .brandbox h1{font-size:16px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .brandbox p,.hdr-ver{display:none!important}
+  .hdr-sync{font-size:0!important;gap:0!important}
+}
+
+/* proprie della pagina fatture */
+.dropzone{border:1.5px dashed var(--border-input);border-radius:var(--radius);padding:26px;text-align:center;transition:border-color .15s,background .15s;cursor:pointer}
+.dropzone:hover{border-color:var(--accent);background:var(--accent-weak)}
 </style>
 </head>
 <body>
@@ -385,21 +450,30 @@ function nextInvoiceNumber(inv){
 /* ==========================================================
    DESIGN SYSTEM (identico a index.html)
    ========================================================== */
+/* Identici a quelli dell'inventory: le due pagine sono collegate da un
+   pulsante, e passare da una all'altra non deve sembrare cambiare programma. */
 const S={
-  card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:14},
-  label:{display:"block",fontSize:11,color:"var(--text-label)",marginBottom:4,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
-  input:{width:"100%",padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,color:"var(--text)",fontSize:14,boxSizing:"border-box",fontFamily:"inherit"},
-  badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600})
+  card:{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:"var(--radius)",padding:20,marginBottom:14,boxShadow:"var(--shadow)"},
+  label:{display:"block",fontSize:12.5,color:"var(--text-label)",marginBottom:6,fontWeight:500},
+  input:{width:"100%",height:38,padding:"0 12px",background:"var(--bg-input)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",color:"var(--text)",fontSize:14,boxSizing:"border-box",fontFamily:"inherit",transition:"border-color .15s,box-shadow .15s"},
+  badge:bg=>({background:bg||"var(--badge-neutral)",color:"var(--text)",padding:"2.5px 9px",borderRadius:20,fontSize:11.5,fontWeight:600,display:"inline-block"})
 };
+const fmtN=v=>Number(v||0).toLocaleString("it-IT");
 
-function Card({children,style,accent}){return<div style={{...S.card,...(accent?{border:`1px solid ${accent}`}:{}),...style}}>{children}</div>}
-function Inp({label,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<input {...p} style={{...S.input,...p.style}}/></div>}
-function Sel({label,options,...p}){return<div style={{marginBottom:10}}>{label&&<label style={S.label}>{label}</label>}<select {...p} style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
+function Card({children,style,accent}){
+  const acc=accent?{background:`color-mix(in srgb, ${accent} 7%, var(--bg-card))`,borderColor:`color-mix(in srgb, ${accent} 26%, var(--border))`}:{};
+  return<div style={{...S.card,...acc,...style}}>{children}</div>
+}
+function Inp({label,...p}){return<div style={{marginBottom:12}}>{label&&<label style={S.label}>{label}</label>}<input {...p} className={"f "+(p.className||"")} style={{...S.input,...p.style}}/></div>}
+function Sel({label,options,...p}){return<div style={{marginBottom:12}}>{label&&<label style={S.label}>{label}</label>}<select {...p} className="f" style={S.input}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>}
 function Btn({children,onClick,v="pri",style,disabled,type}){
-  const bg={pri:"#6366f1",ok:"#10b981",danger:"#ef4444",ghost:"transparent"}[v];
-  const bd=v==="ghost"?"1px solid var(--ghost-border)":"none";
-  const cl=v==="ghost"?"var(--ghost-text)":"#fff";
-  return<button onClick={onClick} disabled={disabled} type={type||"button"} style={{padding:"8px 16px",borderRadius:8,border:bd,background:bg,color:cl,fontWeight:600,fontSize:13,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"all .15s",fontFamily:"inherit",...style}}>{children}</button>
+  const st={
+    pri:{background:"var(--accent-fill)",color:"#fff",border:"1px solid transparent"},
+    ok:{background:"var(--accent-fill)",color:"#fff",border:"1px solid transparent"},
+    danger:{background:"transparent",color:"var(--bad)",border:"1px solid var(--border-input)"},
+    ghost:{background:"transparent",color:"var(--ghost-text)",border:"1px solid var(--border-input)"},
+  }[v];
+  return<button onClick={onClick} disabled={disabled} type={type||"button"} style={{height:38,padding:"0 18px",borderRadius:19,fontFamily:"inherit",fontWeight:500,fontSize:14,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,transition:"filter .15s,background .15s,border-color .15s",display:"inline-flex",alignItems:"center",gap:7,whiteSpace:"nowrap",...st,...style}}>{children}</button>
 }
 
 /* ==========================================================
@@ -758,7 +832,7 @@ function GenerateTab({inv,saveInv}){
       sGen(true);
     }catch(e){
       console.error(e);
-      alert("⚠️ Storage pieno: il PDF è stato scaricato ma NON salvato nello storico.\nVai in 'Storico' e cancella le fatture più vecchie per liberare spazio.");
+      alert("⚠ Storage pieno: il PDF è stato scaricato ma NON salvato nello storico.\nVai in 'Storico' e cancella le fatture più vecchie per liberare spazio.");
       try{
         const lightRecord={...record,pdfBase64:null,_storageOmitted:true};
         saveInv({...newState,invoices:[lightRecord,...filtered]});
@@ -779,10 +853,10 @@ function GenerateTab({inv,saveInv}){
         style={{
           display:"block",padding:"24px",borderRadius:10,
           background:isDragging?"var(--bg-card)":"var(--bg-input)",
-          border:isDragging?"2px dashed #6366f1":"2px dashed var(--border-input)",
+          border:isDragging?"2px dashed var(--accent)":"2px dashed var(--border-input)",
           textAlign:"center",cursor:"pointer",transition:"all .15s"
         }}>
-        <div style={{fontSize:32,marginBottom:6}}>{isDragging?"📥":"📄"}</div>
+        <div style={{fontSize:32,marginBottom:6}}>{isDragging?"↓":"+"}</div>
         <div style={{color:"var(--text)",fontWeight:600}}>
           {isDragging?"Rilascia i file qui":"Trascina qui PDF e report .txt o clicca per selezionarli"}
         </div>
@@ -793,18 +867,18 @@ function GenerateTab({inv,saveInv}){
       {/* Stato report Amazon */}
       <div style={{marginTop:12,padding:"10px 14px",borderRadius:8,
         background:amazonReport?(amazonReport.error?"var(--bl-bg)":"var(--bg-input)"):"var(--bg-input)",
-        border:"1px solid "+(amazonReport?(amazonReport.error?"var(--bl-border)":"#10b981"):"var(--border-input)")}}>
+        border:"1px solid "+(amazonReport?(amazonReport.error?"var(--bl-border)":"var(--ok)"):"var(--border-input)")}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:14}}>{amazonReport?(amazonReport.error?"❌":"🛒"):"🛒"}</span>
+              <span style={{fontSize:14}}>{amazonReport?(amazonReport.error?"✕":"✓"):"·"}</span>
               <strong style={{color:"var(--text)",fontSize:13}}>
                 {amazonReport?("Report Amazon: "+amazonReport.fileName):"Report ordini Amazon: non caricato"}
               </strong>
             </div>
-            {amazonReport&&!amazonReport.error&&<div style={{color:"#10b981",fontSize:11,marginTop:3}}>✓ {amazonReport.usable} ordini validi su {amazonReport.rowCount} righe (esclusi cancellati)</div>}
+            {amazonReport&&!amazonReport.error&&<div style={{color:"var(--ok)",fontSize:11,marginTop:3}}>✓ {amazonReport.usable} ordini validi su {amazonReport.rowCount} righe (esclusi cancellati)</div>}
             {amazonReport&&amazonReport.error&&<div style={{color:"var(--bl-text)",fontSize:11,marginTop:3}}>{amazonReport.error}</div>}
-            {!amazonReport&&<div style={{color:"#f59e0b",fontSize:11,marginTop:3}}>⚠️ Senza report, TUTTE le righe useranno il fallback costo Deldo +{FALLBACK_SURCHARGE}€</div>}
+            {!amazonReport&&<div style={{color:"var(--warn)",fontSize:11,marginTop:3}}>⚠ Senza report, TUTTE le righe useranno il fallback costo Deldo +{FALLBACK_SURCHARGE}€</div>}
           </div>
           {amazonReport&&<Btn v="danger" onClick={()=>{sAmazonReport(null);sGen(false)}} style={{fontSize:11,padding:"4px 10px"}}>✕</Btn>}
         </div>
@@ -812,11 +886,11 @@ function GenerateTab({inv,saveInv}){
 
       {files.length>0&&<div style={{marginTop:12}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <span style={{fontSize:12,color:"var(--text-label)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>
+          <span style={{fontSize:12.5,color:"var(--text-label)",fontWeight:500}}>
             File caricati ({files.length})
-            {okFiles.length>0&&<span style={{marginLeft:8,color:"#10b981",fontSize:11}}>✓ {okFiles.length} OK</span>}
-            {hasErrors&&<span style={{marginLeft:8,color:"#ef4444",fontSize:11}}>❌ {files.filter(f=>f.status==="error").length} errore</span>}
-            {hasParsing&&<span style={{marginLeft:8,color:"#f59e0b",fontSize:11}}>⏳ {files.filter(f=>f.status==="parsing").length} in lavorazione</span>}
+            {okFiles.length>0&&<span style={{marginLeft:8,color:"var(--ok)",fontSize:11}}>✓ {okFiles.length} OK</span>}
+            {hasErrors&&<span style={{marginLeft:8,color:"var(--bad)",fontSize:11}}>✕ {files.filter(f=>f.status==="error").length} errore</span>}
+            {hasParsing&&<span style={{marginLeft:8,color:"var(--warn)",fontSize:11}}>· {files.filter(f=>f.status==="parsing").length} in lavorazione</span>}
           </span>
           <Btn v="ghost" onClick={clearAll} style={{fontSize:11,padding:"4px 10px"}}>Svuota lista</Btn>
         </div>
@@ -824,23 +898,23 @@ function GenerateTab({inv,saveInv}){
           {files.map(f=><div key={f.id} style={{
             display:"flex",alignItems:"center",justifyContent:"space-between",
             padding:"10px 14px",background:"var(--bg-input)",borderRadius:8,
-            border:"1px solid "+(f.status==="error"?"#ef4444":f.status==="ok"?"var(--border-input)":"var(--border-input)")
+            border:"1px solid "+(f.status==="error"?"var(--bad)":f.status==="ok"?"var(--border-input)":"var(--border-input)")
           }}>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:14}}>{f.status==="parsing"?"⏳":f.status==="error"?"❌":"📄"}</span>
+                <span style={{fontSize:14}}>{f.status==="parsing"?"·":f.status==="error"?"✕":"✓"}</span>
                 <strong style={{color:"var(--text)",fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</strong>
                 {f.status==="ok"&&f.result?.meta?.supplierInvNum&&<span style={S.badge("var(--badge-info)")}>Inv {f.result.meta.supplierInvNum}</span>}
               </div>
-              {f.status==="parsing"&&<div style={{color:"#f59e0b",fontSize:11,marginTop:3}}>Estrazione in corso...</div>}
-              {f.status==="ok"&&<div style={{color:"#10b981",fontSize:11,marginTop:3}}>✓ {f.result.orders.length} ordini, {f.qty} pezzi, € {fmtEur(f.val)}</div>}
-              {f.status==="error"&&<div style={{color:"#ef4444",fontSize:11,marginTop:3}}>{f.error}</div>}
+              {f.status==="parsing"&&<div style={{color:"var(--warn)",fontSize:11,marginTop:3}}>Estrazione in corso...</div>}
+              {f.status==="ok"&&<div style={{color:"var(--ok)",fontSize:11,marginTop:3}}>✓ {f.result.orders.length} ordini, {f.qty} pezzi, € {fmtEur(f.val)}</div>}
+              {f.status==="error"&&<div style={{color:"var(--bad)",fontSize:11,marginTop:3}}>{f.error}</div>}
             </div>
             <Btn v="danger" onClick={()=>removeFile(f.id)} style={{fontSize:11,padding:"4px 10px",marginLeft:10}}>✕</Btn>
           </div>)}
         </div>
         {hasErrors&&<div style={{marginTop:10,padding:"10px 14px",background:"var(--bl-bg)",border:"1px solid var(--bl-border)",borderRadius:8,color:"var(--bl-text)",fontSize:12}}>
-          ⚠️ Risolvi gli errori (rimuovi i file problematici) prima di procedere con la generazione.
+          ⚠ Risolvi gli errori (rimuovi i file problematici) prima di procedere con la generazione.
         </div>}
       </div>}
     </Card>
@@ -864,23 +938,23 @@ function GenerateTab({inv,saveInv}){
         </div>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Vendita</div>
-          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.totalGross)}</div>
+          <div style={{fontSize:18,fontWeight:700,color:"var(--ok)"}}>€ {fmtEur(computed.totalGross)}</div>
         </div>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
-          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.margin)}</div>
+          <div style={{fontSize:18,fontWeight:700,color:"var(--ok)"}}>€ {fmtEur(computed.margin)}</div>
         </div>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Prezzi Amazon</div>
-          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>{computed.matchedCount}</div>
+          <div style={{fontSize:18,fontWeight:700,color:"var(--ok)"}}>{computed.matchedCount}</div>
         </div>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Fallback +{FALLBACK_SURCHARGE}€</div>
-          <div style={{fontSize:18,fontWeight:700,color:computed.fallbackCount>0?"#f59e0b":"var(--text)"}}>{computed.fallbackCount}</div>
+          <div style={{fontSize:18,fontWeight:700,color:computed.fallbackCount>0?"var(--warn)":"var(--text)"}}>{computed.fallbackCount}</div>
         </div>
       </div>
-      {computed.fallbackCount>0&&<div style={{marginBottom:12,padding:"8px 12px",background:"var(--bg-input)",border:"1px solid #f59e0b",borderRadius:8,fontSize:12,color:"var(--text)"}}>
-        ⚠️ {computed.fallbackCount} {computed.fallbackCount===1?"riga non ha":"righe non hanno"} trovato l'ordine Amazon: prezzo = costo Deldo +{FALLBACK_SURCHARGE}€. Righe evidenziate in tabella.
+      {computed.fallbackCount>0&&<div style={{marginBottom:12,padding:"8px 12px",background:"var(--bg-input)",border:"1px solid var(--warn)",borderRadius:8,fontSize:12,color:"var(--text)"}}>
+        ⚠ {computed.fallbackCount} {computed.fallbackCount===1?"riga non ha":"righe non hanno"} trovato l'ordine Amazon: prezzo = costo Deldo +{FALLBACK_SURCHARGE}€. Righe evidenziate in tabella.
       </div>}
       <div style={{maxHeight:280,overflowY:"auto",border:"1px solid var(--border)",borderRadius:8}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
@@ -906,7 +980,7 @@ function GenerateTab({inv,saveInv}){
               <td style={{padding:8,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
               <td style={{padding:8,textAlign:"center"}}>
                 {l.priceSource==="amazon"
-                  ?<span style={S.badge("var(--badge-ok)")} title={"Ordine Amazon "+l.orderRef}>🛒 Amazon</span>
+                  ?<span style={S.badge("var(--badge-ok)")} title={"Ordine Amazon "+l.orderRef}>Amazon</span>
                   :<div>
                     <span style={S.badge("var(--badge-warn)")} title="Ordine non trovato nel report: ID generato">+{FALLBACK_SURCHARGE}€</span>
                     <div style={{fontSize:9,fontFamily:"monospace",color:"var(--text-muted)",marginTop:3}}>{l.generatedOrderId}</div>
@@ -922,7 +996,7 @@ function GenerateTab({inv,saveInv}){
     {computed&&!hasParsing&&!hasErrors&&<Card>
       <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>3. Dati fattura attiva</h3>
       {inv.customers.length===0?
-        <p style={{color:"#f59e0b",margin:0}}>⚠️ Nessun cliente configurato. Aggiungilo nella tab "Clienti".</p>
+        <p style={{color:"var(--warn)",margin:0}}>⚠ Nessun cliente configurato. Aggiungilo nella tab "Clienti".</p>
         :<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:"0 14px"}}>
             <Sel label="Cliente B2B *" value={customerId} onChange={e=>sCustomerId(e.target.value)} options={inv.customers.map(c=>({v:c.id,l:c.name+" - "+c.vat}))}/>
@@ -934,9 +1008,9 @@ function GenerateTab({inv,saveInv}){
             {computed.supplierInvoices.length>1&&<><br/>Riferimento nelle note PDF: <strong>{computed.supplierInvoices.map(s=>s.number).join(", ")}</strong></>}
           </p>
           <div style={{textAlign:"center"}}>
-            <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>📄 Genera fattura PDF</Btn>
+            <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>Genera fattura PDF</Btn>
           </div>
-          {generated&&<div style={{textAlign:"center",marginTop:12,color:"#10b981",fontSize:13}}>
+          {generated&&<div style={{textAlign:"center",marginTop:12,color:"var(--ok)",fontSize:13}}>
             ✓ PDF generato, scaricato e salvato in <strong>Storico</strong>. Prossima fattura: {nextInvoiceNumber({...inv,lastInvoiceNumber:next.num,invoiceYear:next.year}).formatted}
           </div>}
         </>}
@@ -1020,7 +1094,7 @@ function HistoryTab({inv,saveInv}){
   };
 
   const clearAll=()=>{
-    if(!confirm("⚠️ Eliminare TUTTO lo storico? Operazione non annullabile."))return;
+    if(!confirm("⚠ Eliminare TUTTO lo storico? Operazione non annullabile."))return;
     if(!confirm("Sei davvero sicuro? Verranno persi i PDF di tutte le fatture emesse."))return;
     saveInv({...inv,invoices:[]});
   };
@@ -1035,11 +1109,10 @@ function HistoryTab({inv,saveInv}){
     </div>
 
     {/* ===== REGISTRO ORDINI SENZA NUMERO AMAZON ===== */}
-    <Card style={{padding:0,overflow:"hidden",border:registry.length>0?"1px solid #f59e0b":"1px solid var(--border)"}}>
+    <Card style={{padding:0,overflow:"hidden",border:registry.length>0?"1px solid var(--warn)":"1px solid var(--border)"}}>
       <div onClick={()=>sShowRegistry(!showRegistry)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:16}}>🏷️</span>
-          <div>
+                    <div>
             <strong style={{color:"var(--text)",fontSize:14}}>Ordini senza numero Amazon</strong>
             <span style={{...S.badge(registry.length>0?"var(--badge-warn)":"var(--badge-neutral)"),marginLeft:8}}>{registry.length}</span>
             <div style={{fontSize:11,color:"var(--text-muted)",marginTop:2}}>Ordini con ID generato internamente (prefisso 409-), tracciati con fattura fornitore e fattura emessa.</div>
@@ -1095,27 +1168,27 @@ function HistoryTab({inv,saveInv}){
           </div>
           <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
             <div style={{fontSize:11,color:"var(--text-label)"}}>Fatturato</div>
-            <div style={{fontSize:22,fontWeight:700,color:"#10b981"}}>€ {fmtEur(stats.totRev)}</div>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--ok)"}}>€ {fmtEur(stats.totRev)}</div>
           </div>
           <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"10px 14px"}}>
             <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
-            <div style={{fontSize:22,fontWeight:700,color:"#10b981"}}>€ {fmtEur(stats.totMargin)}</div>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--ok)"}}>€ {fmtEur(stats.totMargin)}</div>
           </div>
         </div>
 
         <Card style={{padding:12,marginBottom:14}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-            <span style={{fontSize:12,color:"var(--text-label)",fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Spazio storage</span>
+            <span style={{fontSize:12.5,color:"var(--text-label)",fontWeight:500}}>Spazio storage</span>
             <span style={{fontSize:12,color:"var(--text-muted)"}}>{storageInfo.mb.toFixed(2)} MB / ~{storageInfo.limit} MB</span>
           </div>
           <div style={{background:"var(--bg-input)",borderRadius:6,height:8,overflow:"hidden"}}>
-            <div style={{width:storageInfo.pct+"%",height:"100%",background:storageInfo.pct>80?"#ef4444":storageInfo.pct>60?"#f59e0b":"#10b981",transition:"width .3s"}}/>
+            <div style={{width:storageInfo.pct+"%",height:"100%",background:storageInfo.pct>80?"var(--bad)":storageInfo.pct>60?"var(--warn)":"var(--ok)",transition:"width .3s"}}/>
           </div>
-          {storageInfo.pct>80&&<p style={{color:"#ef4444",fontSize:12,margin:"6px 0 0"}}>⚠️ Spazio quasi esaurito. Elimina le fatture più vecchie.</p>}
+          {storageInfo.pct>80&&<p style={{color:"var(--bad)",fontSize:12,margin:"6px 0 0"}}>⚠ Spazio quasi esaurito. Elimina le fatture più vecchie.</p>}
         </Card>
 
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:10,marginBottom:14}}>
-          <input value={query} onChange={e=>sQuery(e.target.value)} placeholder="🔍 Cerca per numero, cliente, P.IVA, riferimento fornitore..." style={S.input}/>
+          <input value={query} onChange={e=>sQuery(e.target.value)} placeholder="Cerca per numero, cliente, P.IVA, riferimento fornitore..." style={S.input}/>
           <select value={yearFilter} onChange={e=>sYearFilter(e.target.value)} style={S.input}>
             <option value="all">Tutti gli anni</option>
             {years.map(y=><option key={y} value={y}>{y}</option>)}
@@ -1138,7 +1211,7 @@ function HistoryTab({inv,saveInv}){
                     <div style={{fontSize:11,color:"var(--text-muted)"}}>{rec.customerVat} • {rec.qty} pz • {rec.lineCount} righe</div>
                   </div>
                   <div style={{textAlign:"right",minWidth:100}}>
-                    <div style={{fontWeight:700,color:"#10b981",fontSize:14}}>€ {fmtEur(rec.total)}</div>
+                    <div style={{fontWeight:700,color:"var(--ok)",fontSize:14}}>€ {fmtEur(rec.total)}</div>
                     {rec.margin!==undefined&&<div style={{fontSize:11,color:"var(--text-muted)"}}>marg. € {fmtEur(rec.margin)}</div>}
                   </div>
                 </div>
@@ -1233,7 +1306,7 @@ function CustomersTab({inv,saveInv}){
         </div>
       </div>
     </Card>)}
-    {ed!==null&&<Card accent="#6366f1">
+    {ed!==null&&<Card accent="var(--accent)">
       <h4 style={{color:"var(--accent-form)",margin:"0 0 10px"}}>{ed==="new"?"Nuovo cliente":"Modifica cliente"}</h4>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"0 14px"}}>
         <Inp label="Ragione sociale *" value={f.name} onChange={e=>sF({...f,name:e.target.value})}/>
@@ -1268,7 +1341,7 @@ function MarkupTab({inv,saveInv}){
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div>
         <h3 style={{margin:0,color:"var(--text)",fontSize:17}}>Regole ricarico per fascia di prezzo</h3>
-        <p style={{margin:"4px 0 0",color:"#f59e0b",fontSize:13}}>⚠️ Non più usate per la generazione fatture: i prezzi di vendita vengono ora presi dal report ordini Amazon (fallback: costo Deldo +{FALLBACK_SURCHARGE}€). Questa tab resta solo come archivio configurazione.</p>
+        <p style={{margin:"4px 0 0",color:"var(--warn)",fontSize:13}}>⚠ Non più usate per la generazione fatture: i prezzi di vendita vengono ora presi dal report ordini Amazon (fallback: costo Deldo +{FALLBACK_SURCHARGE}€). Questa tab resta solo come archivio configurazione.</p>
       </div>
       <Btn onClick={add}>+ Fascia</Btn>
     </div>
@@ -1445,13 +1518,13 @@ function ArchivioCard({inv,saveInv}){
       <div style={{fontSize:11,color:"var(--text-muted)",marginTop:4}}>origine attuale: <code>{location.origin||"file://"}</code></div>
     </div>
     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-      <Btn v="ok" onClick={esporta}>⬇ Esporta archivio (JSON)</Btn>
+      <Btn v="ok" onClick={esporta}>↓ Esporta archivio (JSON)</Btn>
       <label style={{padding:"8px 16px",borderRadius:8,border:"1px solid var(--ghost-border)",color:"var(--ghost-text)",fontWeight:600,fontSize:13,cursor:"pointer"}}>
-        ⬆ Importa e unisci
+        ↑ Importa e unisci
         <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{importa(e.target.files[0],true);e.target.value=""}}/>
       </label>
       <label style={{padding:"8px 16px",borderRadius:8,border:"1px solid var(--bl-border)",color:"var(--bl-text)",fontWeight:600,fontSize:13,cursor:"pointer"}}>
-        ⬆ Importa e sostituisci
+        ↑ Importa e sostituisci
         <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{importa(e.target.files[0],false);e.target.value=""}}/>
       </label>
     </div>
@@ -1461,8 +1534,8 @@ function ArchivioCard({inv,saveInv}){
       numerazione non torna indietro. <strong>Sostituisci</strong> butta l'archivio di questo browser
       e mette quello del file.
     </p>
-    {msg&&<p style={{margin:"10px 0 0",fontSize:13,color:"#10b981"}}>✓ {msg}</p>}
-    {err&&<p style={{margin:"10px 0 0",fontSize:13,color:"#ef4444"}}>❌ {err}</p>}
+    {msg&&<p style={{margin:"10px 0 0",fontSize:13,color:"var(--ok)"}}>✓ {msg}</p>}
+    {err&&<p style={{margin:"10px 0 0",fontSize:13,color:"var(--bad)"}}>✕ {err}</p>}
   </Card>
 }
 
@@ -1470,8 +1543,8 @@ function ArchivioCard({inv,saveInv}){
    APP
    ========================================================== */
 function ThemeToggle({theme,toggle}){
-  return<button onClick={toggle} title={theme==="dark"?"Passa a light mode":"Passa a dark mode"} style={{background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--text)",transition:"all .15s"}}>
-    {theme==="dark"?"☀️":"🌙"}
+  return<button onClick={toggle} title={theme==="dark"?"Passa al tema chiaro":"Passa al tema scuro"} style={{width:30,height:30,display:"inline-flex",alignItems:"center",justifyContent:"center",background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:8,cursor:"pointer",fontSize:14,lineHeight:1,color:"var(--text)",transition:"border-color .15s"}}>
+    {theme==="dark"?"☀":"☾"}
   </button>
 }
 
@@ -1490,34 +1563,35 @@ function App(){
   if(!ok)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>Caricamento...</div>;
 
   const tabs=[
-    {id:"generate",label:"📄 Genera fattura"},
-    {id:"history",label:"📚 Storico",n:(inv.invoices||[]).length},
-    {id:"customers",label:"👥 Clienti",n:inv.customers.length},
-    {id:"markup",label:"💰 Ricarichi",n:inv.markupTiers.length},
-    {id:"settings",label:"⚙️ Impostazioni"}
+    {id:"generate",label:"Genera fattura"},
+    {id:"history",label:"Storico",n:(inv.invoices||[]).length},
+    {id:"customers",label:"Clienti",n:inv.customers.length},
+    {id:"markup",label:"Ricarichi",n:inv.markupTiers.length},
+    {id:"settings",label:"Impostazioni"}
   ];
 
   return<div>
-    <div className="app-header" style={{background:"linear-gradient(135deg,var(--bg-header-start) 0%,var(--bg-header-end) 100%)",borderBottom:"1px solid var(--border)",padding:"20px 32px"}}>
-      <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-        <div>
-          <h1 style={{margin:0,fontSize:24,fontWeight:700,letterSpacing:-.5}}>
-            <span style={{color:"#6366f1"}}>▸</span> Global Way Invoicing
-            <span style={{fontSize:12,color:"var(--text-muted)",fontWeight:400,marginLeft:8}}>v1</span>
-          </h1>
-          <p style={{margin:"4px 0 0",color:"var(--text-muted)",fontSize:13}}>Parsing fatture passive Deldo • Fattura attiva intracomunitaria • Ricarichi per fascia</p>
+    <div className="app-header" style={{padding:"14px 32px"}}>
+      <div style={{maxWidth:1300,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16}}>
+        <div className="brandbox" style={{minWidth:0}}>
+          <h1 style={{margin:0,fontSize:19,fontWeight:600,letterSpacing:"-.022em"}}>Fatturazione <span className="hdr-ver" style={{fontSize:12,color:"var(--text-muted)",fontWeight:400}}>1</span></h1>
+          <p style={{margin:"2px 0 0",color:"var(--text-muted)",fontSize:12.5}}>Fatture passive Deldo · fattura attiva intracomunitaria · ricarichi per fascia</p>
         </div>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          <a href="index.html" className="navlink">← Inventory Converter</a>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+          <a href="index.html" className="navlink">← Inventario</a>
           <ThemeToggle theme={theme} toggle={toggleTheme}/>
         </div>
       </div>
     </div>
-    <div className="app-tabs" style={{display:"flex",gap:0,borderBottom:"1px solid var(--border)",padding:"0 32px",overflowX:"auto"}}>
-      <div style={{maxWidth:1300,margin:"0 auto",width:"100%",display:"flex"}}>
-        {tabs.map(t=><button key={t.id} onClick={()=>sTab(t.id)} style={{padding:"12px 20px",background:"none",border:"none",color:tab===t.id?"var(--tab-active)":"var(--tab-inactive)",borderBottom:tab===t.id?"2px solid #6366f1":"2px solid transparent",cursor:"pointer",fontWeight:600,fontSize:14,transition:"all .15s",whiteSpace:"nowrap",fontFamily:"inherit"}}>
-          {t.label}{t.n!==undefined&&<span style={{marginLeft:6,background:"var(--tab-badge)",padding:"2px 8px",borderRadius:10,fontSize:11}}>{t.n}</span>}
-        </button>)}
+    <div className="app-tabs" style={{padding:"0 32px 12px"}}>
+      <div style={{maxWidth:1300,margin:"0 auto"}}>
+        <div className="segmented" role="tablist">
+          {tabs.map(t=>(
+            <button key={t.id} className="seg" role="tab" aria-selected={tab===t.id} onClick={()=>sTab(t.id)}>
+              {t.label}{t.n!==undefined&&<span className="segbadge">{t.n}</span>}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
     <div className="app-content" style={{padding:28,maxWidth:820,margin:"0 auto"}}>
