@@ -5,6 +5,9 @@
  */
 import assert from "node:assert";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import XLSX from "xlsx";
 import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
 import { seedTemplate, resolveColumns, vocabFor, vocabFromLists, extractVocabLists } from "./netlify/functions/_lib/template.mjs";
@@ -955,6 +958,41 @@ t("le righe senza ASIN a quantita' 0 non contano come righe in lotteria", () => 
   assert.ok(/without_asin_active/.test(html), "il banner non usa il conteggio delle sole righe in vendita");
   // La frase che dava per certa una causa che non possiamo conoscere.
   assert.ok(!/Sono EAN nuovi che il fornitore ha iniziato a mandare/.test(html), "il banner afferma ancora una causa non verificabile");
+});
+
+t("check_mappe trova lo stesso ASIN abbinato a EAN diversi", () => {
+  // Caso reale del 07/09/2026: ASIN B0BRCJZLTN, titolo Goodyear 245/35 R20 su
+  // amazon.de e Hankook 275/35 R21 su amazon.it. L'audit di una mappa alla volta
+  // non poteva vederlo: confronta il titolo di UN marketplace col listino, e il
+  // titolo tedesco combaciava. Incrociando le due mappe la contraddizione salta.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mappe-"));
+  const H = "ean,asin,marca,misura,titolo_amazon\n";
+  const A = H + '"4038526342256","B0AAAAAAAA","GOODYEAR","245/35/20","Goodyear F1 Asym 5"\n'
+              + '"8019227433999","B0CSS8HNSW","PIRELLI","225/65/17","Pirelli Cinturato AS SF3"\n';
+  // stesso ASIN B0CSS8HNSW su un EAN diverso: una delle due mappe sbaglia
+  const B = H + '"4038526342256","B0BRCJZLTN","GOODYEAR","245/35/20","Goodyear F1 Asym 5"\n'
+              + '"9999999999994","B0CSS8HNSW","HANKOOK","275/35/21","Hankook ion evo"\n';
+  fs.writeFileSync(path.join(dir, "a.csv"), A);
+  fs.writeFileSync(path.join(dir, "b.csv"), B);
+  // Lo script esce con codice 1 quando trova conflitti: e' voluto, serve per
+  // farlo fallire in automatico. Qui quel codice e' il risultato atteso.
+  let out;
+  try {
+    out = execFileSync(process.execPath,
+      [path.resolve("check_mappe.mjs"), path.join(dir, "a.csv"), path.join(dir, "b.csv")],
+      { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).toString();
+    assert.fail("con un conflitto lo script deve uscire con codice diverso da 0");
+  } catch (e) {
+    if (!e.stdout) throw e;
+    out = e.stdout.toString();
+    assert.equal(e.status, 1, "codice di uscita inatteso: " + e.status);
+  }
+  assert.match(out, /STESSO ASIN, EAN DIVERSI: 1/, "non ha trovato il conflitto di ASIN:\n" + out);
+  assert.match(out, /B0CSS8HNSW/, "non nomina l'ASIN in conflitto");
+  assert.match(out, /STESSO EAN, ASIN DIVERSI: 1/, "non ha trovato l'EAN con due ASIN");
+  const csv = fs.readFileSync(path.join(dir, "report", "mappe_asin_in_conflitto.csv"), "utf8");
+  assert.match(csv, /B0CSS8HNSW/, "il csv dei conflitti e' vuoto");
+  assert.ok(csv.split("\n").filter(Boolean).length === 3, "il csv non riporta entrambe le righe in conflitto");
 });
 
 t("le due pagine condividono lo stesso design", () => {

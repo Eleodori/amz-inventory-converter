@@ -316,20 +316,115 @@ fs.writeFileSync("report/ean_non_piu_forniti.csv",
     `https://sellercentral.amazon.it/skucentral?mSku=${r.sku}&condition=New`].map(esc).join(",")).join("\n") + "\n");
 fs.writeFileSync("report/blacklist_asin_sbagliati.txt",
   [...new Set([...wrong, ...G.loadWrong].map(r => r.sku))].sort().join("\n") + "\n");
+// Due nostre offerte sullo stesso ASIN: una delle due e' per forza sulla pagina
+// sbagliata, e non lo vede nessun altro controllo. Il controllo sulla mappa
+// verificata non basta: la collisione nasce quando una SKU e' pinnata e l'altra
+// e' stata pubblicata col solo EAN, e Amazon l'ha attaccata alla stessa pagina.
+// Un ordine su quella pagina fa arrivare al cliente un pneumatico diverso.
+const collRows = [];
+for (const [asin, skus] of collisions) {
+  const off = offers.find(o => o.asin1 === asin) || {};
+  for (const s of skus) {
+    const d = deldo.get(s);
+    const o = offers.find(x => x["seller-sku"] === s) || {};
+    collRows.push({
+      asin, sku: s,
+      prodotto: d ? `${deldoBrand(d.Brand)} ${d.Width}/${d.Height} R${d.Rim} ${d.Loadindex || ""} ${d.Pattern || ""}`.trim() : "non nel listino",
+      titolo: (off["item-name"] || "").slice(0, 100),
+      prezzo: o.price || "", quantita: o.quantity || "",
+    });
+  }
+}
+fs.writeFileSync("report/asin_condivisi.csv",
+  "asin,ean,cosa_spediremmo,cosa_dice_la_pagina,prezzo,quantita,link_sku_central\n" +
+  collRows.map(r => [r.asin, r.sku, r.prodotto, r.titolo, r.prezzo, r.quantita,
+    `https://sellercentral.amazon.it/skucentral?mSku=${r.sku}&condition=New`].map(esc).join(",")).join("\n") + "\n");
 console.log(`\nscritti in report/:`);
 console.log(`  asin_sbagliati.csv          ${wrong.length}`);
 console.log(`  asin_carico_diverso.csv     ${G.loadWrong.length}`);
 console.log(`  asin_non_verificabili.csv   ${G.noSizeInTitle.length}`);
 console.log(`  ean_non_piu_forniti.csv     ${G.noDeldo.length}`);
 console.log(`  blacklist_asin_sbagliati.txt ${new Set([...wrong, ...G.loadWrong].map(r => r.sku)).size} EAN da bloccare`);
+console.log(`  asin_condivisi.csv          ${collRows.length} righe su ${collisions.length} ASIN condivisi`);
+if (collisions.length) console.log(`     \u26a0 ogni ASIN condiviso ha almeno un'offerta sulla pagina sbagliata: guarda quel file per primo`);
 
 // Mappa verificata: 1 EAN → 1 ASIN, marca e misura confermate dal titolo.
 // E' la base per pinnare l'ASIN nel file quotidiano invece di lasciare indovinare Amazon.
 // La mappa verificata. Se e' stata passata una mappa esistente le coppie nuove
 // ci vengono UNITE: verificando i risultati di una ricerca su 600 EAN non si
 // devono perdere le 4.800 coppie gia' buone.
-const nuove = new Map();
-for (const r of [...G.ok, ...(G.brandOmitted || [])]) nuove.set(r.sku, [r.sku, r.asin, r.brand, r.dKey, r.title]);
+// La ricerca prodotti puo' restituire PIU' ASIN candidati per lo stesso EAN
+// (Amazon ne ha restituiti 1.333 per 609 EAN). Se piu' di un candidato risulta
+// coerente non possiamo scegliere: e' esattamente il caso in cui l'abbinamento
+// automatico ha venduto il pneumatico sbagliato. Quegli EAN restano fuori dalla
+// mappa e finiscono in un report da guardare a mano.
+const perEan = new Map();
+for (const r of [...G.ok, ...(G.brandOmitted || [])]) {
+  if (!perEan.has(r.sku)) perEan.set(r.sku, []);
+  const lista = perEan.get(r.sku);
+  if (!lista.some(x => x.asin === r.asin)) lista.push(r);
+}
+/**
+ * Fra piu' candidati coerenti, decidere se sono pagine DOPPIE dello stesso
+ * pneumatico o prodotti davvero diversi.
+ *
+ * Marca e misura coincidono per definizione (sono passati dal filtro). Resta
+ * l'indice di carico: se e' lo stesso su tutti i candidati, e' lo stesso
+ * pneumatico su pagine diverse — Amazon ne ha molte, con titoli scritti in modi
+ * diversi ("Pilot Sport 4 S" / "Ps4 S", "ContiSportContact 5P" / "Csc5P").
+ *
+ * Il battistrada NON serve a distinguere: le abbreviazioni lo rendono assente
+ * dal titolo in un candidato su due, e sarebbe una differenza finta. Serve invece
+ * a SCEGLIERE: fra pagine equivalenti si preferisce quella che nomina il
+ * battistrada, che e' la scheda piu' specifica.
+ */
+const LOAD_MIN = 60, LOAD_MAX = 185;   // fuori da questo intervallo non e' una portata
+const loadsInTitle = t => {
+  const out = new Set();
+  const re = /\b(\d{2,3})\s*(?:\/\s*\d{2,3}\s*)?([A-Z])\b/gi;
+  let m;
+  while ((m = re.exec(String(t))) !== null) { const n = +m[1]; if (n >= LOAD_MIN && n <= LOAD_MAX) out.add(n); }
+  return out;
+};
+const nuove = new Map(), ambigui = [], doppie = [];
+for (const [ean, cand] of perEan) {
+  if (cand.length === 1) { const r = cand[0]; nuove.set(ean, [ean, r.asin, r.brand, r.dKey, r.title]); continue; }
+  const d = deldo.get(ean);
+  const dl = d ? deldoLoad(d) : null;
+  // la portata di Deldo compare in tutti i titoli, oppure in nessuno?
+  const presenze = cand.map(c => dl !== null && loadsInTitle(c.title).has(dl));
+  const stessaPortata = presenze.every(p => p) || presenze.every(p => !p);
+  if (!stessaPortata) { ambigui.push({ ean, cand }); continue; }
+
+  // pagine doppie: si scegli la piu' specifica, cioe' quella che nomina il battistrada
+  const toks = String(d?.Pattern || "").replace(/[^A-Za-z0-9]/g, " ").split(/\s+/)
+    .filter(w => w.length >= 4).map(letters);
+  const conBattistrada = cand.filter(c => toks.length && toks.some(w => letters(c.title).includes(w)));
+  const scelto = (conBattistrada.length ? conBattistrada : cand)[0];
+  nuove.set(ean, [ean, scelto.asin, scelto.brand, scelto.dKey, scelto.title]);
+  doppie.push({ ean, scelto, scartati: cand.filter(c => c.asin !== scelto.asin) });
+}
+
+if (doppie.length) {
+  console.log(`\n  ${doppie.length} EAN avevano piu' ASIN con la stessa marca, misura e portata:`);
+  console.log(`     sono pagine doppie dello stesso pneumatico. Scelta la scheda che nomina il battistrada.`);
+  for (const x of doppie.slice(0, 5))
+    console.log(`      ${x.ean}  →  ${x.scelto.asin}   (scartati ${x.scartati.map(c => c.asin).join(", ")})`);
+  if (doppie.length > 5) console.log(`      … e altri ${doppie.length - 5}`);
+  fs.writeFileSync("report/ean_asin_pagine_doppie.csv",
+    "ean,scelto,titolo_scelto,scartato,titolo_scartato\n" +
+    doppie.flatMap(x => x.scartati.map(c =>
+      [x.ean, x.scelto.asin, x.scelto.title, c.asin, c.title].map(esc).join(","))).join("\n") + "\n");
+}
+if (ambigui.length) {
+  console.log(`\n  ⚠️  ${ambigui.length} EAN hanno candidati con PORTATA DIVERSA: non entrano in mappa`);
+  for (const a of ambigui.slice(0, 8))
+    console.log(`      ${a.ean}  →  ${a.cand.map(c => c.asin).join(" | ")}`);
+  if (ambigui.length > 8) console.log(`      … e altri ${ambigui.length - 8}`);
+  fs.writeFileSync("report/ean_asin_ambigui.csv",
+    "ean,asin,marca,misura,titolo_amazon\n" +
+    ambigui.flatMap(a => a.cand.map(c => [a.ean, c.asin, c.brand, c.dKey, c.title].map(esc).join(","))).join("\n") + "\n");
+}
 
 let esistenti = new Map(), conflitti = [];
 if (MAP_PATH) {
