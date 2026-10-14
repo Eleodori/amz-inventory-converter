@@ -70,6 +70,8 @@ const DEFAULT_INV={
   ],
   lastInvoiceNumber:0,
   invoiceYear:new Date().getFullYear(),
+  ncLastNumber:0,
+  ncYear:new Date().getFullYear(),
   invoices:[],
   noOrderRegistry:[],
   paymentTerms:"immediate",
@@ -128,6 +130,69 @@ async function extractTextFromPDF(file){
   return text;
 }
 
+/* ==========================================================
+   ESTRAZIONE INDIRIZZO CLIENTE da un blocco "numero d'ordine"
+   Deldo. Condivisa tra parser fatture e parser note di credito.
+   ========================================================== */
+function extractDeldoClient(block){
+  const empty={name:"",street:"",city:"",country:"Italy"};
+  const addrM=block.match(/indirizzo di\s+([\s\S]+)/i);
+  if(!addrM)return empty;
+  const addrBlock=addrM[1];
+  const countryRe=/^(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)$/i;
+  // Righe di footer/header Deldo (ordine spezzato su due pagine): scartate senza interrompere.
+  const junkRe=/Pagina:|condizioni generali|www\.deldo\.com|deldo\.com|FATTURA|Deldo Autobanden|Bureau & Magazijn|Essensteenweg|Brasschaat|Noorderlaan|Antwerpen|BE0413|544\.49\.49|info@deldo|Global Way LT MB|Nageviciaus|Vilnius|Lithuania|numero fattura|data fattura|BTW nummer|numero cliente|Quantità\s+Descrizione|prezzo\s+Totale|riserva di proprietà|lemerci consegnate|pagamento completo|difetti o danni|stesso giorno della consegna|didiritto interessi|risarcimento danni|diritto belga|Convezione di Vienna|prescrizione del 14 giugno|protocollo dell|tribunali di Anversa|giudice di pace|accettand[oe] la spedizione|acquirente conferma|LT\d{11}/i;
+  const lines=[];
+  for(const raw of addrBlock.split("\n")){
+    const s=raw.trim();
+    if(!s)continue;
+    if(/^\d{1,3}\s+\d{2,3}\s+\d{2,3}/.test(s))break;      // riga articolo fattura
+    if(/^-\d{1,3}\s+\S/.test(s))break;                      // riga articolo nota di credito (qty negativa)
+    if(/^\d+\s+DPD/i.test(s))break;
+    if(/^Creditering/i.test(s))continue;                    // riga NC "Creditering retour: NNNNNN"
+    if(junkRe.test(s))continue;
+    if(/^\d{8}\s+\d{2}-\d{2}-\d{4}/.test(s))continue;       // riga meta fattura pagina successiva
+    lines.push(s);
+  }
+  const nameParts=[];let capCity="";let street="";let country="Italy";
+  const capRe=/(?:^|\D)(\d{4,5}\s+\S.*)$/;
+  // Vie: prefissi it/fr/de + suffissi tedeschi con civico (es. "Rohrmoosweg 257")
+  const streetRe=/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada|str(?:aße|aBe|asse)|rue|avenue|allee|boulevard|platz|weg|gasse|josefstrabe|.*stra[ßB]e|.*strasse|.*(?:weg|gasse|platz|allee|ring|damm|hof)\s+\d)/i;
+  for(const ln of lines){
+    if(countryRe.test(ln)){country=ln;continue}
+    const capInLine=ln.match(capRe);
+    if(capInLine && !/^\d{4,5}\s/.test(ln)){
+      const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
+      const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
+      let right=capInLine[1].trim();
+      const rcm=right.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
+      if(rcm){country=rcm[1];right=right.slice(0,rcm.index).trim()}
+      if(left)nameParts.push(left);
+      if(!capCity)capCity=right;
+      continue;
+    }
+    if(/^\d{4,5}\s/.test(ln)){
+      let v=ln;
+      const rcm=v.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
+      if(rcm){country=rcm[1];v=v.slice(0,rcm.index).trim()}
+      if(!capCity)capCity=v;
+      continue;
+    }
+    if(/^\d{7,}-?$/.test(ln))continue;
+    if(/^[\d\s\-]+$/.test(ln) && /\d{7,}/.test(ln))continue;
+    if(streetRe.test(ln)){
+      if(!street)street=ln;
+      continue;
+    }
+    const cleaned=ln.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,(m,g)=>{country=g;return""}).replace(/^[-\s,]+|[-\s,]+$/g,"");
+    if(cleaned)nameParts.push(cleaned);
+  }
+  capCity=capCity.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,"").trim();
+  let fullName=nameParts.join(" ");
+  fullName=fullName.replace(/-?\s*\d{6,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
+  return {name:fullName,street,city:capCity,country};
+}
+
 function parseDeldo(text){
   let supplierInvNum=null,supplierInvDate=null;
   const metaM=text.match(/(\d{8})\s+(\d{2}-\d{2}-\d{4})\s+([A-Z]{2}\d+)/);
@@ -148,76 +213,8 @@ function parseDeldo(text){
       items:[]
     };
 
-    // INDIRIZZO CLIENTE
-    const addrM=block.match(/indirizzo di\s+([\s\S]+)/i);
-    if(addrM){
-      const addrBlock=addrM[1];
-      // paesi noti da estrarre come terminatori/marker (case-insensitive)
-      const countryRe=/^(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)$/i;
-      // Righe di footer/header Deldo che compaiono quando un ordine è spezzato
-      // su due pagine del PDF (es. "Pagina: 1/2", condizioni generali,
-      // intestazioni della pagina successiva). Vanno SCARTATE, non incluse
-      // nell'indirizzo, ma senza interrompere la raccolta (l'indirizzo può
-      // continuare dopo l'interruzione di pagina).
-      const junkRe=/Pagina:|condizioni generali|www\.deldo\.com|deldo\.com|FATTURA|Deldo Autobanden|Bureau & Magazijn|Essensteenweg|Brasschaat|Noorderlaan|Antwerpen|BE0413|544\.49\.49|info@deldo|Global Way LT MB|Nageviciaus|Vilnius|Lithuania|numero fattura|data fattura|BTW nummer|numero cliente|Quantità\s+Descrizione|prezzo\s+Totale|riserva di proprietà|lemerci consegnate|pagamento completo|difetti o danni|stesso giorno della consegna|didiritto interessi|risarcimento danni|diritto belga|Convezione di Vienna|prescrizione del 14 giugno|protocollo dell|tribunali di Anversa|giudice di pace|accettand[oe] la spedizione|acquirente conferma|LT\d{11}/i;
-      const lines=[];
-      for(const raw of addrBlock.split("\n")){
-        const s=raw.trim();
-        if(!s)continue;
-        if(/^\d{1,3}\s+\d{2,3}\s+\d{2,3}/.test(s))break;
-        if(/^\d+\s+DPD/i.test(s))break;
-        if(junkRe.test(s))continue;  // scarta footer/header, non interrompere
-        // scarta anche la riga meta fattura "26161301 24-08-2026 ..." della pagina successiva
-        if(/^\d{8}\s+\d{2}-\d{2}-\d{4}/.test(s))continue;
-        lines.push(s);
-      }
-      const nameParts=[];let capCity="";let street="";let country="Italy";
-      const capRe=/(?:^|\D)(\d{4,5}\s+\S.*)$/;
-      // Riconoscimento via: italiano + tedesco + francese
-      const streetRe=/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada|str(?:aße|aBe|asse)|rue|avenue|allee|boulevard|platz|weg|gasse|josefstrabe|.*stra[ßB]e|.*strasse)/i;
-      for(const ln of lines){
-        // 1) riga "Italy"/"Germany"/etc. da sola
-        if(countryRe.test(ln)){country=ln;continue}
-        // 2) riga con NOME + CAP CITTÀ + (Paese) sulla stessa linea (layout 2 col)
-        // Esempio: "indirizzo di BROMURI Gianni -3401686821 - 48125 Frz.Mensa Matellica-RA"
-        // Esempio: "Harun Topaloglu- 44536 Lunen"
-        const capInLine=ln.match(capRe);
-        if(capInLine && !/^\d{4,5}\s/.test(ln)){
-          const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
-          const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
-          let right=capInLine[1].trim();
-          // se la parte "right" contiene il nome di un paese in coda, separalo
-          const rcm=right.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
-          if(rcm){country=rcm[1];right=right.slice(0,rcm.index).trim()}
-          if(left)nameParts.push(left);
-          if(!capCity)capCity=right;
-          continue;
-        }
-        // 3) riga "CAP città" da sola
-        if(/^\d{4,5}\s/.test(ln)){
-          let v=ln;
-          const rcm=v.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
-          if(rcm){country=rcm[1];v=v.slice(0,rcm.index).trim()}
-          if(!capCity)capCity=v;
-          continue;
-        }
-        // 4) telefono solo: skip
-        if(/^\d{7,}-?$/.test(ln))continue;
-        if(/^[\d\s\-]+$/.test(ln) && /\d{7,}/.test(ln))continue;
-        // 5) via (it/de/fr)
-        if(streetRe.test(ln)){
-          if(!street)street=ln;
-          continue;
-        }
-        // 6) tutto il resto = nome
-        const cleaned=ln.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,(m,g)=>{country=g;return""}).replace(/^[-\s,]+|[-\s,]+$/g,"");
-        if(cleaned)nameParts.push(cleaned);
-      }
-      capCity=capCity.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,"").trim();
-      let fullName=nameParts.join(" ");
-      fullName=fullName.replace(/-?\s*\d{6,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
-      order.client={name:fullName,street,city:capCity,country};
-    }
+    // INDIRIZZO CLIENTE (logica condivisa con il parser note di credito)
+    order.client=extractDeldoClient(block);
 
     // RIGHE ARTICOLI
     const cleanLines=[];
@@ -381,11 +378,72 @@ function parseBest4Tires(text){
 }
 
 /* ==========================================================
-   DISPATCHER: riconosce automaticamente il formato fattura
+   PARSER NOTE DI CREDITO DELDO (header "CREDIT")
+   Stessa struttura delle fatture ma: quantità negative sui
+   pneumatici, righe di costo positive (Administratie kosten,
+   Transportkosten) che vengono INCLUSE (decisione: la nostra NC
+   usa il totale Deldo, costi girati al cliente). Esclusa solo
+   la riga doganale riepilogativa "Passenger car Tyres 40111000".
+   ========================================================== */
+function parseDeldoCredit(text){
+  let supplierInvNum=null,supplierInvDate=null,declaredTotal=null;
+  const metaM=text.match(/(\d{8})\s+(\d{2}-\d{2}-\d{4})\s+([A-Z]{2}\d+)/);
+  if(metaM){supplierInvNum=metaM[1];supplierInvDate=metaM[2]}
+  const totM=text.match(/Totale Euro\s+(-?\d+[.,]\d{2})/i);
+  if(totM)declaredTotal=parseFloat(totM[1].replace(",","."));
+
+  const blocks=text.split(/numero d'ordine\s*:/i).slice(1);
+  const orders=[];
+  for(const block of blocks){
+    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(.+?)\s*-\s*(\d+)\s*(?:\n|$)/);
+    if(!ord)continue;
+    const order={
+      orderId1:ord[1],orderId2:ord[2],ref1:ord[3].trim(),ref2:ord[4],
+      client:extractDeldoClient(block),
+      items:[]
+    };
+    // riferimento alla fattura Deldo originale (riga "Factuur: 26176495 Order: ...")
+    const origM=block.match(/Factuur:\s*(\d{8})/i);
+    order.originalSupplierInvoice=origM?origM[1]:null;
+
+    // RIGHE: pneumatici (qty negativa) + costi (qty positiva). Esclusa la riga
+    // doganale (contiene codice a 8 cifre, es. 40111000) e righe non-item.
+    const itemRe=/^(-?\d{1,3})\s+(.+?)\s+(-?\d+[.,]\d{2})\s+(-?\d+[.,]\d{2})\s*$/;
+    for(const raw of block.split("\n")){
+      const s=raw.trim();
+      if(!s)continue;
+      if(/^label\s*:/i.test(s))continue;
+      if(/condizioni generali/i.test(s))break;
+      const m=s.match(itemRe);
+      if(!m)continue;
+      const desc=m[2].trim();
+      const dl=desc.toLowerCase();
+      if(/\b\d{8}\b/.test(desc))continue;                       // riga doganale
+      if(dl.includes("passenger car tyres")||dl.includes("light truck tyres"))continue;
+      order.items.push({
+        quantity:parseInt(m[1]),
+        description:desc,
+        unitPrice:parseFloat(m[3].replace(",",".")),
+        total:parseFloat(m[4].replace(",","."))
+      });
+    }
+    if(order.items.length>0)orders.push(order);
+  }
+  return {meta:{supplierInvNum,supplierInvDate,declaredTotal},orders,docType:"creditnote"};
+}
+
+/* ==========================================================
+   DISPATCHER: riconosce automaticamente formato fornitore
+   E tipo documento (fattura / nota di credito).
+   Ritorna sempre {meta, orders, docType}.
    ========================================================== */
 function parseSupplierInvoice(text){
-  if(/Best4Tires|Rechnung\s+VRG\d+/i.test(text))return parseBest4Tires(text);
-  return parseDeldo(text);
+  const isCredit=/^\s*CREDIT\s*$/m.test(text)||/CREDITNOTA|CREDIT\s*NOTE|Gutschrift/i.test(text);
+  if(/Best4Tires|Rechnung\s+VRG\d+/i.test(text)){
+    const r=parseBest4Tires(text);r.docType="invoice";return r;
+  }
+  if(isCredit && /Deldo/i.test(text))return parseDeldoCredit(text);
+  const r=parseDeldo(text);r.docType="invoice";return r;
 }
 
 /* ==========================================================
@@ -488,6 +546,12 @@ function nextInvoiceNumber(inv){
   const num=(inv.invoiceYear===y?inv.lastInvoiceNumber:0)+1;
   return {year:y,num,formatted:`${y}/${String(num).padStart(4,"0")}`};
 }
+// Serie separata per le note di credito: NC-YYYY/NNNN
+function nextCreditNoteNumber(inv){
+  const y=new Date().getFullYear();
+  const num=((inv.ncYear||y)===y?(inv.ncLastNumber||0):0)+1;
+  return {year:y,num,formatted:`NC-${y}/${String(num).padStart(4,"0")}`};
+}
 
 /* ==========================================================
    DESIGN SYSTEM (identico a index.html)
@@ -513,6 +577,8 @@ function Btn({children,onClick,v="pri",style,disabled,type}){
    TAB: Genera fattura
    ========================================================== */
 function GenerateTab({inv,saveInv}){
+  // Tipo documento da emettere: fattura o nota di credito
+  const[docType,sDocType]=useState("invoice");
   // Lista di file caricati, ognuno con stato: {id, name, status:'parsing|ok|error', result, error}
   const[files,sFiles]=useState([]);
   const[amazonReport,sAmazonReport]=useState(null); // {fileName, orders:Map, rowCount, usable}
@@ -522,16 +588,30 @@ function GenerateTab({inv,saveInv}){
   const[invNumOverride,sInvNumOverride]=useState("");
   const[generated,sGen]=useState(false);
 
-  const next=useMemo(()=>nextInvoiceNumber(inv),[inv.lastInvoiceNumber,inv.invoiceYear]);
+  const isNC=docType==="creditnote";
+  const switchDocType=(t)=>{
+    if(t===docType)return;
+    sDocType(t);sFiles([]);sGen(false);sInvNumOverride("");
+  };
+
+  const next=useMemo(
+    ()=>isNC?nextCreditNoteNumber(inv):nextInvoiceNumber(inv),
+    [isNC,inv.lastInvoiceNumber,inv.invoiceYear,inv.ncLastNumber,inv.ncYear]
+  );
   const effectiveInvNum=invNumOverride.trim()||next.formatted;
 
-  // processa un singolo file: estrae testo + parsa
+  // processa un singolo file: estrae testo + parsa (con controllo tipo documento)
   const processOne=async(f,id)=>{
     try{
       const txt=await extractTextFromPDF(f);
       const result=parseSupplierInvoice(txt);
+      if((result.docType||"invoice")!==docType){
+        const found=result.docType==="creditnote"?"una NOTA DI CREDITO":"una FATTURA";
+        const mode=docType==="creditnote"?"Nota di credito":"Fattura";
+        return {id,name:f.name,status:"error",error:`Questo PDF è ${found}, ma sei in modalità ${mode}. Cambia tipo documento o rimuovi il file.`};
+      }
       if(!result.orders.length){
-        return {id,name:f.name,status:"error",error:"Nessun pneumatico estratto. Verifica che sia una fattura Deldo o Best4Tires valida."};
+        return {id,name:f.name,status:"error",error:"Nessuna riga estratta. Verifica che sia un documento Deldo o Best4Tires valido."};
       }
       const qty=result.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.quantity,0),0);
       const val=result.orders.reduce((s,o)=>s+o.items.reduce((ss,it)=>ss+it.total,0),0);
@@ -612,6 +692,28 @@ function GenerateTab({inv,saveInv}){
     for(const f of okFiles){
       for(const ord of f.result.orders){
         for(const it of ord.items){
+          if(isNC){
+            // NOTA DI CREDITO: importi presi dal documento fornitore così come sono
+            // (pneumatici negativi + eventuali costi positivi). Nessun match Amazon.
+            totalNet+=it.total;totalGross+=it.total;totalQty+=it.quantity;
+            lines.push({
+              orderRef:ord.ref1,
+              originalRef:ord.ref1,
+              generatedOrderId:null,
+              sourceInvoice:f.result.meta?.supplierInvNum||null,
+              sourceInvoiceDate:f.result.meta?.supplierInvDate||null,
+              clientName:ord.client.name,
+              clientAddr:[ord.client.street,ord.client.city,ord.client.country].filter(Boolean).join(", "),
+              quantity:it.quantity,
+              description:it.description,
+              unitCost:it.unitPrice,
+              unitPrice:it.unitPrice,
+              priceSource:"creditnote",
+              lineTotal:it.total,
+              cost:it.total
+            });
+            continue;
+          }
           const resolved=resolveSellPrice(it.unitPrice,it.quantity,ord.ref1,amazonOrders);
           const unitSell=resolved.unitPrice;
           const lineTotal=unitSell*it.quantity;
@@ -651,7 +753,7 @@ function GenerateTab({inv,saveInv}){
     }
     const supplierInvoices=[...supplierInvoicesMap.values()].sort((a,b)=>a.number.localeCompare(b.number));
     return {lines,totalNet,totalGross,totalQty,margin:totalGross-totalNet,supplierInvoices,matchedCount,fallbackCount};
-  },[okFiles,amazonReport]);
+  },[okFiles,amazonReport,isNC]);
 
   const customer=inv.customers.find(c=>String(c.id)===String(customerId));
 
@@ -659,9 +761,10 @@ function GenerateTab({inv,saveInv}){
     if(!computed||!customer)return;
 
     // controllo duplicati nello storico (messaggio resta in italiano: è UI per l'utente)
+    const docLabel=isNC?"nota di credito":"fattura";
     const existing=(inv.invoices||[]).find(x=>x.number===effectiveInvNum);
     if(existing){
-      const ok=confirm(`Esiste già una fattura con numero ${effectiveInvNum} (emessa il ${isoToIt(existing.date)} a ${existing.customerName}, totale € ${fmtEur(existing.total)}).\n\nProcedere comunque?\nLa nuova fattura sostituirà quella nello storico.`);
+      const ok=confirm(`Esiste già una ${docLabel} con numero ${effectiveInvNum} (emessa il ${isoToIt(existing.date)} a ${existing.customerName}, totale € ${fmtEur(existing.total)}).\n\nProcedere comunque?\nIl nuovo documento sostituirà quello nello storico.`);
       if(!ok)return;
     }
 
@@ -669,9 +772,9 @@ function GenerateTab({inv,saveInv}){
     const doc=new jsPDF({unit:"mm",format:"a4"});
     const pw=doc.internal.pageSize.getWidth();
 
-    // HEADER — issuer + INVOICE title
-    doc.setFont("helvetica","bold");doc.setFontSize(20);
-    doc.text("INVOICE",pw-15,18,{align:"right"});
+    // HEADER — issuer + title (INVOICE / CREDIT NOTE)
+    doc.setFont("helvetica","bold");doc.setFontSize(isNC?17:20);
+    doc.text(isNC?"CREDIT NOTE":"INVOICE",pw-15,18,{align:"right"});
     doc.setFontSize(11);doc.setFont("helvetica","bold");
     doc.text(ISSUER.name,15,18);
     doc.setFont("helvetica","normal");doc.setFontSize(9);
@@ -682,8 +785,8 @@ function GenerateTab({inv,saveInv}){
     doc.setDrawColor(180);doc.setLineWidth(.3);
     doc.line(15,42,pw-15,42);
     doc.setFontSize(8);doc.setFont("helvetica","bold");doc.setTextColor(90);
-    doc.text("INVOICE NUMBER",15,48);
-    doc.text("INVOICE DATE",60,48);
+    doc.text(isNC?"CREDIT NOTE NUMBER":"INVOICE NUMBER",15,48);
+    doc.text(isNC?"CREDIT NOTE DATE":"INVOICE DATE",60,48);
     doc.text("ISSUER VAT NUMBER",100,48);
     doc.text("PAYMENT TERMS",152,48);
     doc.setTextColor(0);doc.setFont("helvetica","normal");doc.setFontSize(11);
@@ -752,15 +855,16 @@ function GenerateTab({inv,saveInv}){
     const supInvs=computed.supplierInvoices||[];
     if(supInvs.length){
       noteLines.push("");
+      const srcLabel=isNC?"credit note":"invoice";
       if(supInvs.length===1){
         const s=supInvs[0];
-        noteLines.push(`Source invoice ref: ${s.number}${s.date?" of "+s.date:""}`);
+        noteLines.push(`Source ${srcLabel} ref: ${s.number}${s.date?" of "+s.date:""}`);
       }else{
-        noteLines.push(`Source invoices ref: ${supInvs.map(s=>s.number).join(", ")}`);
+        noteLines.push(`Source ${srcLabel}s ref: ${supInvs.map(s=>s.number).join(", ")}`);
       }
     }
-    // IBAN per pagamento (se impostato nelle Impostazioni)
-    if(inv.iban && inv.iban.trim()){
+    // IBAN per pagamento (solo fatture: nelle NC siamo noi ad accreditare)
+    if(!isNC && inv.iban && inv.iban.trim()){
       noteLines.push("");
       noteLines.push(`Payment by bank transfer - IBAN: ${inv.iban.trim()}`);
     }
@@ -790,7 +894,7 @@ function GenerateTab({inv,saveInv}){
     doc.text(`${ISSUER.name} • ${ISSUER.address1}, ${ISSUER.address2}, ${ISSUER.country} • VAT ${ISSUER.vat}`,pw/2,fy,{align:"center"});
 
     // Download
-    const fname=`Invoice_${effectiveInvNum.replace(/[\/\\]/g,"-")}_${customer.name.replace(/[^a-z0-9]/gi,"_").slice(0,20)}.pdf`;
+    const fname=`${isNC?"CreditNote":"Invoice"}_${effectiveInvNum.replace(/[\/\\]/g,"-")}_${customer.name.replace(/[^a-z0-9]/gi,"_").slice(0,20)}.pdf`;
     doc.save(fname);
 
     // Salva nello storico
@@ -801,6 +905,7 @@ function GenerateTab({inv,saveInv}){
     const firstSup=supInvs[0]||null;
     const record={
       id:Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      docType:isNC?"creditnote":"invoice",
       number:effectiveInvNum,
       date:invDate,
       filename:fname,
@@ -829,11 +934,11 @@ function GenerateTab({inv,saveInv}){
     const filtered=(inv.invoices||[]).filter(x=>x.number!==effectiveInvNum);
     const newInvoices=[record,...filtered];
 
-    // ===== REGISTRO ORDINI SENZA NUMERO AMAZON =====
+    // ===== REGISTRO ORDINI SENZA NUMERO AMAZON (solo fatture) =====
     // Rimuovi eventuali voci precedenti di questa stessa fattura (caso rigenerazione),
     // poi aggiungi le nuove voci per ogni riga fallback.
     const registryKept=(inv.noOrderRegistry||[]).filter(x=>x.invoiceNumber!==effectiveInvNum);
-    const registryNew=computed.lines
+    const registryNew=(isNC?[]:computed.lines)
       .filter(l=>l.priceSource==="fallback")
       .map(l=>({
         id:l.generatedOrderId+"_"+effectiveInvNum,
@@ -858,7 +963,9 @@ function GenerateTab({inv,saveInv}){
       ...inv,
       invoices:newInvoices,
       noOrderRegistry:newRegistry,
-      ...(invNumOverride.trim()||existing?{}:{lastInvoiceNumber:next.num,invoiceYear:next.year})
+      ...(invNumOverride.trim()||existing?{}
+        :isNC?{ncLastNumber:next.num,ncYear:next.year}
+        :{lastInvoiceNumber:next.num,invoiceYear:next.year})
     };
     try{
       saveInv(newState);
@@ -875,9 +982,23 @@ function GenerateTab({inv,saveInv}){
   };
 
   return<div>
+    {/* ===== SELETTORE TIPO DOCUMENTO ===== */}
+    <Card style={{padding:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <label style={{...S.label,marginBottom:0}}>Tipo documento</label>
+        <div className="modeswitch" style={{display:"inline-flex",background:"var(--bg-input)",border:"1px solid var(--border-input)",borderRadius:10,padding:3,gap:2}}>
+          <button onClick={()=>switchDocType("invoice")} style={{background:!isNC?"#6366f1":"none",color:!isNC?"#fff":"var(--text-muted)",border:"none",padding:"7px 14px",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>📄 Fattura</button>
+          <button onClick={()=>switchDocType("creditnote")} style={{background:isNC?"#ef4444":"none",color:isNC?"#fff":"var(--text-muted)",border:"none",padding:"7px 14px",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>↩️ Nota di credito</button>
+        </div>
+        {isNC&&<span style={{fontSize:12,color:"var(--text-muted)"}}>Importi presi dalla NC fornitore così come sono (merce + costi). Numerazione separata NC-{new Date().getFullYear()}/NNNN.</span>}
+      </div>
+    </Card>
+
     <Card>
-      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>1. Carica fatture passive (PDF Deldo / Best4Tires) + report ordini Amazon (.txt)</h3>
-      <p style={{margin:"0 0 12px",color:"var(--text-muted)",fontSize:13}}>Carica uno o più PDF fornitore (Deldo o Best4Tires) <strong>e</strong> il report ordini Amazon del periodo. Il prezzo di vendita di ogni riga viene preso dall'ordine Amazon corrispondente; se un ordine non è nel report, viene applicato il costo fornitore <strong>+{FALLBACK_SURCHARGE}€</strong> a pneumatico.</p>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>{isNC?"1. Carica note di credito fornitore (PDF Deldo)":"1. Carica fatture passive (PDF Deldo / Best4Tires) + report ordini Amazon (.txt)"}</h3>
+      {isNC
+        ?<p style={{margin:"0 0 12px",color:"var(--text-muted)",fontSize:13}}>Carica una o più note di credito Deldo (header "CREDIT"). Verrà generata <strong>una sola nota di credito</strong> al cliente con gli stessi importi del documento fornitore: righe pneumatico (negative) e costi amministrativi/trasporto (positivi). Il report Amazon non serve.</p>
+        :<p style={{margin:"0 0 12px",color:"var(--text-muted)",fontSize:13}}>Carica uno o più PDF fornitore (Deldo o Best4Tires) <strong>e</strong> il report ordini Amazon del periodo. Il prezzo di vendita di ogni riga viene preso dall'ordine Amazon corrispondente; se un ordine non è nel report, viene applicato il costo fornitore <strong>+{FALLBACK_SURCHARGE}€</strong> a pneumatico.</p>}
 
       <label
         onDrop={onDrop}
@@ -897,8 +1018,8 @@ function GenerateTab({inv,saveInv}){
         <input type="file" accept=".pdf,.txt,.tsv,.csv" multiple style={{display:"none"}} onChange={e=>{if(e.target.files?.length)addFiles(e.target.files);e.target.value=""}}/>
       </label>
 
-      {/* Stato report Amazon */}
-      <div style={{marginTop:12,padding:"10px 14px",borderRadius:8,
+      {/* Stato report Amazon (non necessario per le note di credito) */}
+      {!isNC&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,
         background:amazonReport?(amazonReport.error?"var(--bl-bg)":"var(--bg-input)"):"var(--bg-input)",
         border:"1px solid "+(amazonReport?(amazonReport.error?"var(--bl-border)":"#10b981"):"var(--border-input)")}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
@@ -915,7 +1036,7 @@ function GenerateTab({inv,saveInv}){
           </div>
           {amazonReport&&<Btn v="danger" onClick={()=>{sAmazonReport(null);sGen(false)}} style={{fontSize:11,padding:"4px 10px"}}>✕</Btn>}
         </div>
-      </div>
+      </div>}
 
       {files.length>0&&<div style={{marginTop:12}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -954,7 +1075,7 @@ function GenerateTab({inv,saveInv}){
 
     {computed&&!hasParsing&&!hasErrors&&<Card>
       <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>2. Anteprima righe estratte
-        {okFiles.length>1&&<span style={{fontWeight:400,fontSize:13,color:"var(--text-muted)",marginLeft:8}}>(da {okFiles.length} fatture passive)</span>}
+        {okFiles.length>1&&<span style={{fontWeight:400,fontSize:13,color:"var(--text-muted)",marginLeft:8}}>(da {okFiles.length} {isNC?"note di credito":"fatture passive"})</span>}
       </h3>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,marginBottom:12}}>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
@@ -962,31 +1083,31 @@ function GenerateTab({inv,saveInv}){
           <div style={{fontSize:18,fontWeight:700}}>{computed.lines.length}</div>
         </div>
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
-          <div style={{fontSize:11,color:"var(--text-label)"}}>Pezzi</div>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>{isNC?"Pezzi (reso)":"Pezzi"}</div>
           <div style={{fontSize:18,fontWeight:700}}>{computed.totalQty}</div>
         </div>
-        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+        {!isNC&&<div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Costo</div>
           <div style={{fontSize:18,fontWeight:700}}>€ {fmtEur(computed.totalNet)}</div>
-        </div>
+        </div>}
         <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
-          <div style={{fontSize:11,color:"var(--text-label)"}}>Vendita</div>
-          <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.totalGross)}</div>
+          <div style={{fontSize:11,color:"var(--text-label)"}}>{isNC?"Totale NC":"Vendita"}</div>
+          <div style={{fontSize:18,fontWeight:700,color:isNC?"#ef4444":"#10b981"}}>€ {fmtEur(computed.totalGross)}</div>
         </div>
-        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+        {!isNC&&<div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Margine</div>
           <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>€ {fmtEur(computed.margin)}</div>
-        </div>
-        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+        </div>}
+        {!isNC&&<div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Prezzi Amazon</div>
           <div style={{fontSize:18,fontWeight:700,color:"#10b981"}}>{computed.matchedCount}</div>
-        </div>
-        <div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
+        </div>}
+        {!isNC&&<div style={{background:"var(--bg-stat)",borderRadius:8,padding:"8px 12px"}}>
           <div style={{fontSize:11,color:"var(--text-label)"}}>Fallback +{FALLBACK_SURCHARGE}€</div>
           <div style={{fontSize:18,fontWeight:700,color:computed.fallbackCount>0?"#f59e0b":"var(--text)"}}>{computed.fallbackCount}</div>
-        </div>
+        </div>}
       </div>
-      {computed.fallbackCount>0&&<div style={{marginBottom:12,padding:"8px 12px",background:"var(--bg-input)",border:"1px solid #f59e0b",borderRadius:8,fontSize:12,color:"var(--text)"}}>
+      {!isNC&&computed.fallbackCount>0&&<div style={{marginBottom:12,padding:"8px 12px",background:"var(--bg-input)",border:"1px solid #f59e0b",borderRadius:8,fontSize:12,color:"var(--text)"}}>
         ⚠️ {computed.fallbackCount} {computed.fallbackCount===1?"riga non ha":"righe non hanno"} trovato l'ordine Amazon: prezzo = costo Deldo +{FALLBACK_SURCHARGE}€. Righe evidenziate in tabella.
       </div>}
       <div style={{maxHeight:280,overflowY:"auto",border:"1px solid var(--border)",borderRadius:8}}>
@@ -994,32 +1115,32 @@ function GenerateTab({inv,saveInv}){
           <thead style={{background:"var(--bg-input)",position:"sticky",top:0}}>
             <tr>
               <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Q.tà</th>
-              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Pneumatico</th>
+              <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>{isNC?"Voce":"Pneumatico"}</th>
               <th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Cliente / Indirizzo</th>
-              {okFiles.length>1&&<th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>Fattura</th>}
-              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Acquisto</th>
-              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Vendita</th>
-              <th style={{padding:8,textAlign:"center",color:"var(--text-label)"}}>Fonte</th>
+              {okFiles.length>1&&<th style={{padding:8,textAlign:"left",color:"var(--text-label)"}}>{isNC?"NC Deldo":"Fattura"}</th>}
+              {!isNC&&<th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Acquisto</th>}
+              <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>{isNC?"Prezzo":"Vendita"}</th>
+              {!isNC&&<th style={{padding:8,textAlign:"center",color:"var(--text-label)"}}>Fonte</th>}
               <th style={{padding:8,textAlign:"right",color:"var(--text-label)"}}>Totale</th>
             </tr>
           </thead>
           <tbody>
             {computed.lines.map((l,i)=><tr key={i} style={{borderTop:"1px solid var(--border)",background:l.priceSource==="fallback"?"rgba(245,158,11,.08)":"transparent"}}>
-              <td style={{padding:8}}>{l.quantity}</td>
+              <td style={{padding:8,color:l.quantity<0?"#ef4444":"var(--text)"}}>{l.quantity}</td>
               <td style={{padding:8}}>{l.description}</td>
               <td style={{padding:8,fontSize:11}}><div style={{fontWeight:600}}>{l.clientName}</div><div style={{color:"var(--text-muted)"}}>{l.clientAddr}</div></td>
               {okFiles.length>1&&<td style={{padding:8,fontSize:11,color:"var(--text-muted)"}}>{l.sourceInvoice||"—"}</td>}
-              <td style={{padding:8,textAlign:"right",color:"var(--text-muted)"}}>€ {fmtEur(l.unitCost)}</td>
+              {!isNC&&<td style={{padding:8,textAlign:"right",color:"var(--text-muted)"}}>€ {fmtEur(l.unitCost)}</td>}
               <td style={{padding:8,textAlign:"right"}}>€ {fmtEur(l.unitPrice)}</td>
-              <td style={{padding:8,textAlign:"center"}}>
+              {!isNC&&<td style={{padding:8,textAlign:"center"}}>
                 {l.priceSource==="amazon"
                   ?<span style={S.badge("var(--badge-ok)")} title={"Ordine Amazon "+l.orderRef}>🛒 Amazon</span>
                   :<div>
                     <span style={S.badge("var(--badge-warn)")} title="Ordine non trovato nel report: ID generato">+{FALLBACK_SURCHARGE}€</span>
                     <div style={{fontSize:9,fontFamily:"monospace",color:"var(--text-muted)",marginTop:3}}>{l.generatedOrderId}</div>
                   </div>}
-              </td>
-              <td style={{padding:8,textAlign:"right",fontWeight:600}}>€ {fmtEur(l.lineTotal)}</td>
+              </td>}
+              <td style={{padding:8,textAlign:"right",fontWeight:600,color:l.lineTotal<0?"#ef4444":"var(--text)"}}>€ {fmtEur(l.lineTotal)}</td>
             </tr>)}
           </tbody>
         </table>
@@ -1027,24 +1148,24 @@ function GenerateTab({inv,saveInv}){
     </Card>}
 
     {computed&&!hasParsing&&!hasErrors&&<Card>
-      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>3. Dati fattura attiva</h3>
+      <h3 style={{margin:"0 0 12px",color:"var(--text)",fontSize:17}}>{isNC?"3. Dati nota di credito":"3. Dati fattura attiva"}</h3>
       {inv.customers.length===0?
         <p style={{color:"#f59e0b",margin:0}}>⚠️ Nessun cliente configurato. Aggiungilo nella tab "Clienti".</p>
         :<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:"0 14px"}}>
             <Sel label="Cliente B2B *" value={customerId} onChange={e=>sCustomerId(e.target.value)} options={inv.customers.map(c=>({v:c.id,l:c.name+" - "+c.vat}))}/>
-            <Inp label="Numero fattura" value={invNumOverride} onChange={e=>sInvNumOverride(e.target.value)} placeholder={next.formatted}/>
-            <Inp label="Data fattura" type="date" value={invDate} onChange={e=>sInvDate(e.target.value)}/>
+            <Inp label={isNC?"Numero nota di credito":"Numero fattura"} value={invNumOverride} onChange={e=>sInvNumOverride(e.target.value)} placeholder={next.formatted}/>
+            <Inp label={isNC?"Data nota di credito":"Data fattura"} type="date" value={invDate} onChange={e=>sInvDate(e.target.value)}/>
           </div>
           <p style={{color:"var(--text-muted)",fontSize:12,margin:"4px 0 12px"}}>
             Numero progressivo automatico: <strong>{next.formatted}</strong>. Se lasci vuoto il campo viene usato questo, e dopo l'emissione il contatore avanza automaticamente.
             {computed.supplierInvoices.length>1&&<><br/>Riferimento nelle note PDF: <strong>{computed.supplierInvoices.map(s=>s.number).join(", ")}</strong></>}
           </p>
           <div style={{textAlign:"center"}}>
-            <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>📄 Genera fattura PDF</Btn>
+            <Btn v="ok" onClick={generatePDF} disabled={!customer} style={{padding:"12px 40px",fontSize:15}}>{isNC?"↩️ Genera nota di credito PDF":"📄 Genera fattura PDF"}</Btn>
           </div>
           {generated&&<div style={{textAlign:"center",marginTop:12,color:"#10b981",fontSize:13}}>
-            ✓ PDF generato, scaricato e salvato in <strong>Storico</strong>. Prossima fattura: {nextInvoiceNumber({...inv,lastInvoiceNumber:next.num,invoiceYear:next.year}).formatted}
+            ✓ PDF generato, scaricato e salvato in <strong>Storico</strong>. {isNC?"Prossima nota di credito":"Prossima fattura"}: {isNC?nextCreditNoteNumber(inv).formatted:nextInvoiceNumber(inv).formatted}
           </div>}
         </>}
     </Card>}
@@ -1237,7 +1358,10 @@ function HistoryTab({inv,saveInv}){
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer"}} onClick={()=>sExpanded(isOpen?null:rec.id)}>
                 <div style={{display:"flex",alignItems:"center",gap:14,flex:1,minWidth:0}}>
                   <div style={{minWidth:90}}>
-                    <div style={{fontWeight:700,color:"var(--text)",fontSize:14}}>{rec.number}</div>
+                    <div style={{fontWeight:700,color:"var(--text)",fontSize:14,display:"flex",alignItems:"center",gap:6}}>
+                      {rec.number}
+                      {rec.docType==="creditnote"&&<span style={{background:"rgba(239,68,68,.15)",color:"#ef4444",fontSize:9.5,fontWeight:700,padding:"2px 6px",borderRadius:5,letterSpacing:.5}}>NC</span>}
+                    </div>
                     <div style={{fontSize:11,color:"var(--text-muted)"}}>{isoToIt(rec.date)}</div>
                   </div>
                   <div style={{flex:1,minWidth:0}}>
@@ -1245,8 +1369,8 @@ function HistoryTab({inv,saveInv}){
                     <div style={{fontSize:11,color:"var(--text-muted)"}}>{rec.customerVat} • {rec.qty} pz • {rec.lineCount} righe</div>
                   </div>
                   <div style={{textAlign:"right",minWidth:100}}>
-                    <div style={{fontWeight:700,color:"#10b981",fontSize:14}}>€ {fmtEur(rec.total)}</div>
-                    {rec.margin!==undefined&&<div style={{fontSize:11,color:"var(--text-muted)"}}>marg. € {fmtEur(rec.margin)}</div>}
+                    <div style={{fontWeight:700,color:rec.total<0?"#ef4444":"#10b981",fontSize:14}}>€ {fmtEur(rec.total)}</div>
+                    {rec.docType!=="creditnote"&&rec.margin!==undefined&&<div style={{fontSize:11,color:"var(--text-muted)"}}>marg. € {fmtEur(rec.margin)}</div>}
                   </div>
                 </div>
                 <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:14}}>
@@ -1421,9 +1545,14 @@ function MarkupTab({inv,saveInv}){
 function SettingsTab({inv,saveInv}){
   const[year,sYear]=useState(inv.invoiceYear);
   const[num,sNum]=useState(inv.lastInvoiceNumber);
+  const[ncYear,sNcYear]=useState(inv.ncYear||new Date().getFullYear());
+  const[ncNum,sNcNum]=useState(inv.ncLastNumber||0);
   const[terms,sTerms]=useState(inv.paymentTerms||"immediate");
   const[iban,sIban]=useState(inv.iban||"");
-  const sv=()=>{saveInv({...inv,invoiceYear:parseInt(year)||new Date().getFullYear(),lastInvoiceNumber:parseInt(num)||0});alert("Salvato.")};
+  const sv=()=>{saveInv({...inv,
+    invoiceYear:parseInt(year)||new Date().getFullYear(),lastInvoiceNumber:parseInt(num)||0,
+    ncYear:parseInt(ncYear)||new Date().getFullYear(),ncLastNumber:parseInt(ncNum)||0
+  });alert("Salvato.")};
   const svPay=()=>{
     const cleanIban=iban.trim().replace(/\s+/g," ");
     saveInv({...inv,paymentTerms:terms,iban:cleanIban});
@@ -1435,11 +1564,13 @@ function SettingsTab({inv,saveInv}){
   return<div>
     <h3 style={{margin:"0 0 14px",color:"var(--text)",fontSize:17}}>Impostazioni</h3>
     <Card>
-      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Numerazione fatture</h4>
-      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 12px"}}>La prossima fattura avrà numero <strong style={{color:"var(--text)"}}>{next.formatted}</strong>.</p>
+      <h4 style={{margin:"0 0 10px",color:"var(--accent-form)"}}>Numerazione fatture e note di credito</h4>
+      <p style={{color:"var(--text-muted)",fontSize:13,margin:"0 0 12px"}}>Prossima fattura: <strong style={{color:"var(--text)"}}>{next.formatted}</strong> • Prossima nota di credito: <strong style={{color:"var(--text)"}}>{nextCreditNoteNumber(inv).formatted}</strong></p>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"0 14px"}}>
-        <Inp label="Anno corrente" type="number" value={year} onChange={e=>sYear(e.target.value)}/>
-        <Inp label="Ultimo numero emesso" type="number" value={num} onChange={e=>sNum(e.target.value)}/>
+        <Inp label="Anno fatture" type="number" value={year} onChange={e=>sYear(e.target.value)}/>
+        <Inp label="Ultimo numero fattura" type="number" value={num} onChange={e=>sNum(e.target.value)}/>
+        <Inp label="Anno note di credito" type="number" value={ncYear} onChange={e=>sNcYear(e.target.value)}/>
+        <Inp label="Ultimo numero NC" type="number" value={ncNum} onChange={e=>sNcNum(e.target.value)}/>
       </div>
       <div style={{display:"flex",gap:8}}>
         <Btn v="ok" onClick={sv}>Salva</Btn>
