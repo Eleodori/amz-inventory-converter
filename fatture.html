@@ -131,6 +131,33 @@ async function extractTextFromPDF(file){
 }
 
 /* ==========================================================
+   PARSING RIGA ORDINE DELDO: "NNN - NNN Ref. : <ref>"
+   Il campo <ref> è cambiato formato più volte:
+     "0123566 - 3515387116"                       (numero - numero)
+     "BROMURI Gianni - 3401686821"                (nome - numero)
+     "406-2928635-1800330 - 3208774735"           (Amazon ID - numero)
+     "305-3221117-4081968 - Marian-Jan Ghinea"    (Amazon ID - NOME)
+     "304-4430707-1893150 - 0650 648 90 62"       (Amazon ID - tel. con spazi)
+   Strategia robusta: cattura tutta la riga; se contiene un Amazon
+   order ID lo usa come ref1; altrimenti divide sull'ultimo " - ".
+   ========================================================== */
+function parseDeldoOrderRef(block){
+  const m=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*([^\n]+)/);
+  if(!m)return null;
+  const raw=m[3].trim();
+  let ref1=raw,ref2="";
+  const amz=raw.match(/\d{3}-\d{7}-\d{7}/);
+  if(amz){
+    ref1=amz[0];
+    ref2=raw.replace(amz[0],"").replace(/^\s*-\s*/,"").replace(/\s*-\s*$/,"").trim();
+  }else{
+    const idx=raw.lastIndexOf(" - ");
+    if(idx>0){ref1=raw.slice(0,idx).trim();ref2=raw.slice(idx+3).trim()}
+  }
+  return {orderId1:m[1],orderId2:m[2],ref1,ref2};
+}
+
+/* ==========================================================
    ESTRAZIONE INDIRIZZO CLIENTE da un blocco "numero d'ordine"
    Deldo. Condivisa tra parser fatture e parser note di credito.
    ========================================================== */
@@ -155,13 +182,27 @@ function extractDeldoClient(block){
     lines.push(s);
   }
   const nameParts=[];let capCity="";let street="";let country="Italy";
-  const capRe=/(?:^|\D)(\d{4,5}\s+\S.*)$/;
-  // Vie: prefissi it/fr/de + suffissi tedeschi con civico (es. "Rohrmoosweg 257")
-  const streetRe=/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada|str(?:aße|aBe|asse)|rue|avenue|allee|boulevard|platz|weg|gasse|josefstrabe|.*stra[ßB]e|.*strasse|.*(?:weg|gasse|platz|allee|ring|damm|hof)\s+\d)/i;
-  for(const ln of lines){
+  // Il CAP deve essere seguito da una parola che inizia con LETTERA: così un
+  // telefono spezzato ("0650 648 90 62- 4691 Schlatt") non parte dal gruppo
+  // sbagliato e il match si aggancia al vero "4691 Schlatt...".
+  const capRe=/(?:^|\D)(\d{4,5}\s+[A-Za-z].*)$/;
+  const tailCountryRe=/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i;
+  // Vie: prefissi it/fr/de + suffissi tedeschi con civico (es. "Rohrmoosweg 257",
+  // "ZellstraÃe 1", "Hans Sachs Strase 82", "Waagner-Biro Str 63D")
+  const streetRe=/^(via|v\.le|viale|piazza|p\.zza|p\.za|corso|c\.so|largo|loc\.|str\.|str\s|strada|str(?:aße|aBe|asse)|rue|avenue|allee|boulevard|platz|weg|gasse|josefstrabe|.*stra\S{0,2}e\b\s*\d|.*strasse|.*\bstr\.?\s+\d{1,4}|.*(?:weg|gasse|platz|allee|ring|damm|hof)\s+\d)/i;
+  for(let ln of lines){
     if(countryRe.test(ln)){country=ln;continue}
+    // Paese in coda alla riga (layout 2 colonne: "Wattgasse 24 Austria",
+    // "Nindorfer StraBe 2 Germany"): estrailo subito, il resto si classifica.
+    const tc=ln.match(tailCountryRe);
+    if(tc){country=tc[1];ln=ln.slice(0,tc.index).trim();if(!ln)continue}
+    // Riga composta solo da cifre/spazi/trattini = telefono (anche spezzato
+    // in gruppi tipo "0650 648 90 62"): mai indirizzo, skip.
+    if(/^[\d\s\-]+$/.test(ln))continue;
     const capInLine=ln.match(capRe);
-    if(capInLine && !/^\d{4,5}\s/.test(ln)){
+    // Il candidato "CAP città" deve contenere lettere: un telefono con spazi
+    // ("0650 648 90 62-") altrimenti verrebbe scambiato per CAP+città.
+    if(capInLine && /[A-Za-z]/.test(capInLine[1]) && !/^\d{4,5}\s/.test(ln)){
       const matchStart=capInLine.index+capInLine[0].length-capInLine[1].length;
       const left=ln.slice(0,matchStart).replace(/[-\s]+$/,"").trim();
       let right=capInLine[1].trim();
@@ -171,25 +212,29 @@ function extractDeldoClient(block){
       if(!capCity)capCity=right;
       continue;
     }
-    if(/^\d{4,5}\s/.test(ln)){
-      let v=ln;
-      const rcm=v.match(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i);
-      if(rcm){country=rcm[1];v=v.slice(0,rcm.index).trim()}
-      if(!capCity)capCity=v;
+    if(/^\d{4,5}\s+[A-Za-z]/.test(ln)){
+      if(!capCity)capCity=ln;
       continue;
     }
     if(/^\d{7,}-?$/.test(ln))continue;
-    if(/^[\d\s\-]+$/.test(ln) && /\d{7,}/.test(ln))continue;
     if(streetRe.test(ln)){
       if(!street)street=ln;
       continue;
+    }
+    // Fallback via: se il nome è già noto e la riga termina con un numero
+    // civico (es. "HinterschÃ¼tzing 1", "In Den Bremen 38 44"), è la via.
+    if(!street && nameParts.length>0 && /\s\d{1,4}\s*[a-zA-Z]?\s*(?:[\/,]\s*\S+)?$/.test(ln)){
+      street=ln;continue;
     }
     const cleaned=ln.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,(m,g)=>{country=g;return""}).replace(/^[-\s,]+|[-\s,]+$/g,"");
     if(cleaned)nameParts.push(cleaned);
   }
   capCity=capCity.replace(/\s+(Italy|Germany|France|Spain|Netherlands|Belgium|Austria|Switzerland|Poland|Portugal|Greece|Ireland|United Kingdom|UK)\s*$/i,"").trim();
   let fullName=nameParts.join(" ");
+  // telefoni spezzati in gruppi ("0650 648 90 62") poi quelli compatti (6+ cifre)
+  fullName=fullName.replace(/\b\d{2,4}(?:\s+\d{2,4}){2,}\b/g," ");
   fullName=fullName.replace(/-?\s*\d{6,}\s*-?/g," ").replace(/\s+/g," ").replace(/^[-\s,]+|[-\s,]+$/g,"");
+  fullName=fullName.replace(/\s*-\s*$/,"").trim();
   return {name:fullName,street,city:capCity,country};
 }
 
@@ -203,12 +248,10 @@ function parseDeldo(text){
   const skipKeywords=["eilandtoeslag","dpd","spedizione","trasporto","passenger car tyres","ecotassa","smaltimento"];
 
   for(const block of blocks){
-    // Il primo campo dopo "Ref. :" può essere un numero o un nome (es. "BROMURI Gianni",
-    // "Bressan galliano", "Elia"). Il secondo è sempre numerico (telefono/ID cliente).
-    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(.+?)\s*-\s*(\d+)\s*(?:\n|$)/);
+    const ord=parseDeldoOrderRef(block);
     if(!ord)continue;
     const order={
-      orderId1:ord[1],orderId2:ord[2],ref1:ord[3].trim(),ref2:ord[4],
+      orderId1:ord.orderId1,orderId2:ord.orderId2,ref1:ord.ref1,ref2:ord.ref2,
       client:{name:"",street:"",city:"",country:"Italy"},
       items:[]
     };
@@ -395,10 +438,10 @@ function parseDeldoCredit(text){
   const blocks=text.split(/numero d'ordine\s*:/i).slice(1);
   const orders=[];
   for(const block of blocks){
-    const ord=block.match(/(\d+)\s*-\s*(\d+)\s+Ref\.\s*:\s*(.+?)\s*-\s*(\d+)\s*(?:\n|$)/);
+    const ord=parseDeldoOrderRef(block);
     if(!ord)continue;
     const order={
-      orderId1:ord[1],orderId2:ord[2],ref1:ord[3].trim(),ref2:ord[4],
+      orderId1:ord.orderId1,orderId2:ord.orderId2,ref1:ord.ref1,ref2:ord.ref2,
       client:extractDeldoClient(block),
       items:[]
     };
