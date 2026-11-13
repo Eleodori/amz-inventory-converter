@@ -181,6 +181,20 @@ function MarketPicker({config:c,value,onChange}){
   );
 }
 
+// Esclusione per categoria di veicolo. Deve restare identica a DEFAULT_EXCLUDE
+// di converter.mjs: se il browser e il server filtrassero in modo diverso, il
+// file generato a mano non coinciderebbe con quello del job automatico.
+// Confronto ESATTO, non "contiene": "Light Truck" sono i furgoni e restano.
+const DEFAULT_EXCLUDE={col:"Vehicle",values:["Truck"]};
+function excludeRuleForClient(sup){
+  const col=sup&&sup.excludeCol!==undefined?String(sup.excludeCol||"").trim():DEFAULT_EXCLUDE.col;
+  if(!col)return null;
+  const raw=sup&&sup.excludeCol!==undefined?sup.excludeValues:DEFAULT_EXCLUDE.values;
+  const values=(Array.isArray(raw)?raw:String(raw||"").split(",")).map(v=>String(v).trim().toLowerCase()).filter(Boolean);
+  if(!values.length)return null;
+  return {col:col,values:new Set(values),explicit:!!(sup&&sup.excludeCol!==undefined)};
+}
+
 const DEFAULT_TIERS=[
   {upTo:50,markupPct:18,flatFee:7},
   {upTo:100,markupPct:13,flatFee:10},
@@ -777,7 +791,7 @@ function TiersEditor({tiers,onChange}){
 // ─── SuppliersTab ────────────────────────────────────────────────────────────
 function SuppliersTab({config:c,save}){
   const[ed,sEd]=useState(null);
-  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS,tiersByMarket:{}});
+  const[f,sF]=useState({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",excludeCol:DEFAULT_EXCLUDE.col,excludeValues:DEFAULT_EXCLUDE.values.join(", "),ftpFolder:"",tiers:DEFAULT_TIERS,tiersByMarket:{}});
   // Marketplace di cui si stanno modificando le fasce. Il primario modifica
   // "tiers"; gli altri modificano tiersByMarket[CODICE] solo se hanno fasce
   // dedicate, altrimenti ereditano quelle del primario (stessa regola del
@@ -794,11 +808,14 @@ function SuppliersTab({config:c,save}){
   const creaDedicate=()=>sF({...f,tiersByMarket:{...f.tiersByMarket,[codeT]:(f.tiers||[]).map(t=>({...t}))}});
   const togliDedicate=()=>{const bm={...f.tiersByMarket};delete bm[codeT];sF({...f,tiersByMarket:bm})};
   const copiaTiers=t=>(t||[]).map(x=>({...x}));
-  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",ftpFolder:"",tiers:DEFAULT_TIERS.map(t=>({...t})),tiersByMarket:{}});setMkT(primario);sEd("new");};
+  const nw=()=>{sF({name:"",delimiter:";",skuCol:"",eanCol:"",priceCol:"",stockCol:"",excludeCol:DEFAULT_EXCLUDE.col,excludeValues:DEFAULT_EXCLUDE.values.join(", "),ftpFolder:"",tiers:DEFAULT_TIERS.map(t=>({...t})),tiersByMarket:{}});setMkT(primario);sEd("new");};
   const ed2=i=>{const s=c.suppliers[i];
     const bm={};
     for(const[k,v]of Object.entries(s.tiersByMarket||{}))if(Array.isArray(v)&&v.length)bm[String(k).toUpperCase()]=copiaTiers(v);
-    sF({...s,stockCol:s.stockCol||"",ftpFolder:s.ftpFolder||"",tiers:s.tiers?copiaTiers(s.tiers):DEFAULT_TIERS.map(t=>({...t})),tiersByMarket:bm});
+    sF({...s,stockCol:s.stockCol||"",
+      excludeCol:s.excludeCol===undefined?DEFAULT_EXCLUDE.col:s.excludeCol,
+      excludeValues:Array.isArray(s.excludeValues)?s.excludeValues.join(", "):(s.excludeCol===undefined?DEFAULT_EXCLUDE.values.join(", "):(s.excludeValues||"")),
+      ftpFolder:s.ftpFolder||"",tiers:s.tiers?copiaTiers(s.tiers):DEFAULT_TIERS.map(t=>({...t})),tiersByMarket:bm});
     setMkT(primario);sEd(i);};
   const norm=tiers=>{
     const out=tiers.map(t=>({...t,markupPct:parseFloat(t.markupPct)||0,flatFee:parseFloat(t.flatFee)||0,upTo:t.upTo===null?null:parseFloat(t.upTo)||null}));
@@ -833,6 +850,7 @@ function SuppliersTab({config:c,save}){
                 <span style={S.badge("var(--badge-info)")}>EAN: {s.eanCol}</span>
                 <span style={S.badge("var(--badge-info)")}>Prezzo: {s.priceCol}</span>
                 {s.stockCol&&<span style={S.badge("var(--badge-info)")}>Stock: {s.stockCol}</span>}
+                {(()=>{const r=excludeRuleForClient(s);return r?<span style={S.badge("var(--badge-warn)")}>Escluse: {[...r.values].join(", ")}</span>:null})()}
                 {s.ftpFolder&&<span style={S.badge("var(--badge-neutral)")}>FTP: {s.ftpFolder}</span>}
               </div>
               <div style={{marginTop:6,fontSize:11,color:"var(--text-muted)"}}>
@@ -859,6 +877,8 @@ function SuppliersTab({config:c,save}){
             <Inp label="Colonna EAN" value={f.eanCol} onChange={e=>sF({...f,eanCol:e.target.value})} placeholder="es. EAN"/>
             <Inp label="Colonna Prezzo" value={f.priceCol} onChange={e=>sF({...f,priceCol:e.target.value})} placeholder="es. Price"/>
             <Inp label="Colonna Stock" value={f.stockCol} onChange={e=>sF({...f,stockCol:e.target.value})} placeholder="es. Stock"/>
+            <Inp label="Colonna categoria da escludere" value={f.excludeCol} onChange={e=>sF({...f,excludeCol:e.target.value})} placeholder="es. Vehicle — vuoto disattiva il filtro"/>
+            <Inp label="Valori da escludere" value={f.excludeValues} onChange={e=>sF({...f,excludeValues:e.target.value})} placeholder="es. Truck — separati da virgola, confronto esatto"/>
             <Inp label="Cartella FTP (se diversa dal nome)" value={f.ftpFolder} onChange={e=>sF({...f,ftpFolder:e.target.value})} placeholder={`es. DLD (lascia vuoto se uguale a "${f.name||"nome fornitore"}")`}/>
           </div>
           {codes.length>1&&(
@@ -1203,7 +1223,8 @@ function ConvertTab({config:c}){
       const st=mkSettings(c,mpC);
       const bl=new Set(st.blacklist);
       const em={};
-      let tR=0,tS=0,badEan=0,dup=0,blk=0,below=0;
+      let tR=0,tS=0,badEan=0,dup=0,blk=0,below=0,excl=0;
+      const exclBy={};
       const errs=[];
       const tierCounts={},tierPriceSum={};
       const entries=Object.entries(ups);
@@ -1242,7 +1263,8 @@ function ConvertTab({config:c}){
                 warnings:errs,
                 stats:{marketplace:mpC,leadtime:st.leadtime,total_products:sorted.length,total_rows:records.length,
                   zeroed:0,dropped_from_tracking:0,total_read:tR,total_skipped:tS,bad_ean:badEan,
-                  below_min_stock:below,duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,by_tier:tierCounts,
+                  below_min_stock:below,excluded_by_filter:excl,excluded_breakdown:exclBy,
+                  duplicates_resolved:dup,blacklisted:blk,by_supplier:sc,by_tier:tierCounts,
                   avg_price_by_tier:avg_price_by_tier,avg_price_total:sorted.length>0?priceSum/sorted.length:0,
                   errors:errs,previewData:previewData,generated_at:new Date().toISOString()}
               });
@@ -1262,8 +1284,15 @@ function ConvertTab({config:c}){
           const stC=sup.stockCol?fCol(h,sup.stockCol):null;
           if(!skC||!enC||!prC){errs.push(sn+": colonne non trovate: "+[!skC&&sup.skuCol,!enC&&sup.eanCol,!prC&&sup.priceCol].filter(Boolean).join(", "));step(idx+1);return;}
           if(sup.stockCol&&!stC)errs.push(sn+": colonna stock '"+sup.stockCol+"' non trovata, uso la quantità di fallback");
+          const exRule=excludeRuleForClient(sup);
+          const exC=exRule?fCol(h,exRule.col):null;
+          if(exRule&&!exC&&exRule.explicit)errs.push(sn+": colonna '"+exRule.col+"' non trovata, filtro categoria non applicato");
           for(const row of r){
             tR++;
+            if(exC){
+              const ev=String(row[exC]||"").trim();
+              if(exRule.values.has(ev.toLowerCase())){excl++;exclBy[ev]=(exclBy[ev]||0)+1;continue;}
+            }
             const ean=normalizeEAN(row[enC]);
             const sku=(row[skC]||"").trim();
             const rp=parseFloat((row[prC]||"0").replace(",","."));
@@ -1561,6 +1590,8 @@ function StatsBlock({stats}){
         ["Esclusi non mappati",stats.unmapped_skipped,"Esclusi perché senza ASIN verificato (opzione attiva nel tab ASIN)"],
         ["EAN non validi",stats.bad_ean,"Codici non numerici, lunghezza errata o cifra di controllo sbagliata"],
         ["Sotto soglia",stats.below_min_stock,"Esclusi perché lo stock fornitore è sotto la soglia minima"],
+        ["Categoria esclusa",stats.excluded_by_filter,
+          "Righe scartate per categoria di veicolo"+(stats.excluded_breakdown&&Object.keys(stats.excluded_breakdown).length?": "+Object.entries(stats.excluded_breakdown).map(([k,v])=>k+" "+fmtN(v)).join(", "):"")],
         ["Duplicati",stats.duplicates_resolved],
         ["Blacklist",stats.blacklisted],
         ["Non più tracciate",stats.dropped_from_tracking,"SKU a zero da più giorni del limite: smettiamo di ripeterle"],

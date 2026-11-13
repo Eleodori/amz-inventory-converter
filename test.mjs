@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import XLSX from "xlsx";
-import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns } from "./netlify/functions/_lib/converter.mjs";
+import { runConversion, expandRows, buildTxt, normalizeEAN, applyTiers, parseCSV, safetyCheck, priceColumns, excludeRuleFor, DEFAULT_EXCLUDE } from "./netlify/functions/_lib/converter.mjs";
 import { seedTemplate, resolveColumns, vocabFor, vocabFromLists, extractVocabLists } from "./netlify/functions/_lib/template.mjs";
 import { parseAsinMapCsv, asinMapInfo } from "./netlify/functions/_lib/asinmap.mjs";
 import { keyFor, primaryCode, activeMarketplaces, findMarketplace, settingsFor, tiersFor, migrateConfig, marketplaceSummary, MK_DEFAULTS } from "./netlify/functions/_lib/marketplace.mjs";
@@ -132,6 +132,98 @@ const r4 = runConversion({ ...config, minStock: 50, maxQty: 4, floorMarginPct: 5
 t("esclude sotto la soglia di stock", () => assert.equal(r4.stats.below_min_stock, 1));
 t("applica il tetto alla quantita'", () => assert.equal(r4.records[0].qty, 4));
 t("popola il prezzo minimo", () => assert.equal(r4.records[0].minPrice.toFixed(2), (145.10 * 1.05).toFixed(2)));
+
+console.log("\n── esclusione per categoria di veicolo (camion) ──");
+
+t("il default esclude Truck leggendo la colonna Vehicle", () => {
+  assert.equal(DEFAULT_EXCLUDE.col, "Vehicle");
+  assert.deepEqual(DEFAULT_EXCLUDE.values, ["Truck"]);
+  const r = excludeRuleFor({});
+  assert.equal(r.col, "Vehicle");
+  assert.deepEqual([...r.values], ["truck"]);
+  assert.equal(r.explicit, false, "il default non deve risultare configurato a mano");
+});
+
+t("excludeCol vuoto disattiva il filtro", () => {
+  assert.equal(excludeRuleFor({ excludeCol: "" }), null);
+  assert.equal(excludeRuleFor({ excludeCol: "Vehicle", excludeValues: [] }), null);
+  assert.equal(excludeRuleFor({ excludeCol: "Vehicle", excludeValues: "" }), null);
+});
+
+t("i valori si possono scrivere come lista o come stringa separata da virgole", () => {
+  const a = excludeRuleFor({ excludeCol: "Vehicle", excludeValues: ["Truck", "Quad"] });
+  const b = excludeRuleFor({ excludeCol: "Vehicle", excludeValues: " truck , QUAD " });
+  assert.deepEqual([...a.values].sort(), [...b.values].sort());
+  assert.equal(b.explicit, true);
+});
+
+// Il confronto deve essere esatto. "Light Truck" sono i furgoni: 523 righe nel
+// listino Deldo di novembre 2026, meta' delle quali gia' in vendita su Amazon.
+// Un filtro per sottostringa le spegnerebbe tutte in silenzio.
+const CSV_VEICOLI = [
+  "EAN;Descr;Price;Stock;Vehicle",
+  `${E1};Pirelli auto;145,10;76;Passenger car`,
+  `${E2};Atlas furgone;60,00;46;Light Truck`,
+  `${ean13("777777777777")};Anteo camion;236,00;30;Truck`,
+  `${ean13("777777777778")};Prometeon camion;256,00;30;truck`,
+  `${ean13("777777777779")};Suv;120,00;30;Jeep / 4x4`,
+].join("\n");
+
+const rV = runConversion(config, { Deldo: CSV_VEICOLI }, template, { marketplace: "IT", publishedSkus: {} });
+t("i camion non entrano nel file", () => {
+  assert.equal(rV.stats.excluded_by_filter, 2, "attesi 2 camion esclusi");
+  assert.ok(!rV.records.find(x => x.ean === ean13("777777777777")));
+  assert.ok(!rV.records.find(x => x.ean === ean13("777777777778")));
+});
+t("il confronto non e' case sensitive", () => assert.equal(rV.stats.excluded_breakdown["truck"], 1));
+t("LIGHT TRUCK NON viene escluso: sono i furgoni", () => {
+  assert.ok(rV.records.find(x => x.ean === E2), "il furgone e' sparito dal file");
+  assert.ok(!("Light Truck" in rV.stats.excluded_breakdown));
+});
+t("auto e suv restano", () => {
+  assert.ok(rV.records.find(x => x.ean === E1));
+  assert.ok(rV.records.find(x => x.ean === ean13("777777777779")));
+});
+t("le righe escluse non contano come scartate ne' come lette a vuoto", () => {
+  assert.equal(rV.stats.total_products, 3);
+  assert.equal(rV.stats.excluded_breakdown["Truck"], 1);
+});
+
+t("un fornitore puo' escludere anche i furgoni, se lo chiede", () => {
+  const cfg = { ...config, suppliers: [{ ...config.suppliers[0], excludeCol: "Vehicle", excludeValues: "Truck, Light Truck" }] };
+  const r = runConversion(cfg, { Deldo: CSV_VEICOLI }, template, { marketplace: "IT", publishedSkus: {} });
+  assert.equal(r.stats.excluded_by_filter, 3);
+  assert.ok(!r.records.find(x => x.ean === E2));
+});
+
+t("un fornitore puo' disattivare il filtro", () => {
+  const cfg = { ...config, suppliers: [{ ...config.suppliers[0], excludeCol: "" }] };
+  const r = runConversion(cfg, { Deldo: CSV_VEICOLI }, template, { marketplace: "IT", publishedSkus: {} });
+  assert.equal(r.stats.excluded_by_filter, 0);
+  assert.equal(r.stats.total_products, 5);
+});
+
+// Un listino senza la colonna Vehicle non e' un errore: il filtro semplicemente
+// non si applica. Avvisare a ogni conversione sarebbe rumore.
+t("CSV senza la colonna Vehicle: nessun avviso col filtro di default", () => {
+  const r = runConversion(config, { Deldo: csv }, template, { marketplace: "IT", publishedSkus: {} });
+  assert.equal(r.stats.excluded_by_filter, 0);
+  assert.ok(!r.stats.errors.some(e => /Vehicle/.test(e)), "avviso inatteso: " + r.stats.errors.join(" | "));
+});
+
+t("CSV senza la colonna: avviso se il filtro e' stato scritto a mano", () => {
+  const cfg = { ...config, suppliers: [{ ...config.suppliers[0], excludeCol: "Categoria", excludeValues: "Camion" }] };
+  const r = runConversion(cfg, { Deldo: csv }, template, { marketplace: "IT", publishedSkus: {} });
+  assert.ok(r.stats.errors.some(e => /Categoria/.test(e)), "manca l'avviso sulla colonna assente");
+});
+
+t("il filtro vale anche per le righe gia' pubblicate: il camion non torna su", () => {
+  const pub = { [ean13("777777777777")]: { sku: ean13("777777777777"), price: 250, firstSeen: "2026-11-01", lastSeen: "2026-11-01" } };
+  const r = runConversion(config, { Deldo: CSV_VEICOLI }, template, { marketplace: "IT", publishedSkus: pub });
+  const rec = r.records.find(x => x.ean === ean13("777777777777"));
+  assert.ok(rec, "manca la riga di spegnimento del camion gia' pubblicato");
+  assert.equal(rec.qty, 0, "il camion gia' pubblicato deve uscire a quantita' 0, non sparire");
+});
 
 console.log("\n── mappa EAN → ASIN ──");
 const CSV_MAP = [

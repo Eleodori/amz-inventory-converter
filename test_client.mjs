@@ -8,7 +8,7 @@ import assert from "node:assert";
 import XLSX from "xlsx";
 import * as babel from "@babel/core";
 import { seedTemplate, vocabFor as srvVocabFor } from "./netlify/functions/_lib/template.mjs";
-import { expandRows, buildTxt } from "./netlify/functions/_lib/converter.mjs";
+import { expandRows, buildTxt, excludeRuleFor as srvExcludeRuleFor, DEFAULT_EXCLUDE as SRV_DEFAULT_EXCLUDE } from "./netlify/functions/_lib/converter.mjs";
 import { settingsFor as srvSettingsFor, tiersFor as srvTiersFor } from "./netlify/functions/_lib/marketplace.mjs";
 
 const html = fs.readFileSync("index.html", "utf8");
@@ -26,7 +26,7 @@ const mkStart = code.indexOf("const EU_MP=[");
 const mkEnd = code.indexOf("const DEFAULT_TIERS");
 assert.ok(mkStart > 0 && mkEnd > mkStart, "blocco marketplace non individuato");
 const mkBlock = code.slice(mkStart, mkEnd);
-const out = babel.transformSync(mkBlock + helpers + "\nglobalThis.__H={parseTemplateFile,expandRecords,buildTxt,resolveColumns,normalizeEAN:typeof normalizeEAN!=='undefined'?normalizeEAN:null,fmtPrice,vocabFor,vocabFromLists,extractVocabLists,EU_MP,mpInfo,mpCodes,mpPrimary,mkSettings,tiersForClient};",
+const out = babel.transformSync(mkBlock + helpers + "\nglobalThis.__H={parseTemplateFile,expandRecords,buildTxt,resolveColumns,normalizeEAN:typeof normalizeEAN!=='undefined'?normalizeEAN:null,fmtPrice,vocabFor,vocabFromLists,extractVocabLists,EU_MP,mpInfo,mpCodes,mpPrimary,mkSettings,tiersForClient,DEFAULT_EXCLUDE,excludeRuleForClient};",
   { presets: [["@babel/preset-react", { runtime: "classic" }]], configFile: false, babelrc: false }).code;
 globalThis.XLSX = XLSX;
 globalThis.fetch = async () => { throw new Error("no fetch in test"); };
@@ -208,6 +208,25 @@ for (const code of ["IT", "DE", "FR"]) {
 t("una lista vuota in tiersByMarket non e' una configurazione: si torna a tiers", () => {
   assert.deepEqual(H.tiersForClient(SUP_MK, "FR"), SUP_MK.tiers);
 });
+t("il filtro camion e' identico fra browser e server", () => {
+  assert.deepEqual(H.DEFAULT_EXCLUDE, SRV_DEFAULT_EXCLUDE,
+    "il default del browser e quello del server divergono: il file fatto a mano non coinciderebbe con quello automatico");
+  const casi = [{}, { excludeCol: "" }, { excludeCol: "Vehicle", excludeValues: "Truck, Light Truck" }, { excludeCol: "Vehicle", excludeValues: [] }];
+  for (const c of casi) {
+    const a = H.excludeRuleForClient(c), b = srvExcludeRuleFor(c);
+    if (!a || !b) { assert.equal(!!a, !!b, "divergenza su " + JSON.stringify(c)); continue; }
+    assert.equal(a.col, b.col, "colonna diversa su " + JSON.stringify(c));
+    assert.deepEqual([...a.values].sort(), [...b.values].sort(), "valori diversi su " + JSON.stringify(c));
+    assert.equal(a.explicit, b.explicit, "explicit diverso su " + JSON.stringify(c));
+  }
+});
+
+t("il confronto del filtro e' esatto, non per sottostringa", () => {
+  const r = H.excludeRuleForClient({});
+  assert.ok(r.values.has("truck"));
+  assert.ok(!r.values.has("light truck"), "i furgoni finirebbero nel filtro");
+});
+
 t("gli id marketplace di EU_MP coincidono con quelli verificati sui template", () => {
   const byCode = Object.fromEntries(H.EU_MP.map(m => [m.code, m.id]));
   assert.equal(byCode.IT, "APJ6JRA9NG5V4");

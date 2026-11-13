@@ -58,6 +58,37 @@ export function parseCSV(text, delimiter = ";") {
   return { headers, rows };
 }
 
+/**
+ * Filtro per categoria di veicolo.
+ *
+ * Dal listino Deldo di novembre 2026 arrivano anche gli pneumatici da camion
+ * (cerchi da 17.5", 19.5" e 22.5", Prometeon e Anteo, prezzo medio 283 EUR).
+ * Su Amazon non li vendiamo: pesano oltre 50 kg, la spedizione non rientra in
+ * nessuno dei modelli configurati e nessuno dei 73 EAN e' mai stato mappato.
+ *
+ * Il confronto e' ESATTO, non "contiene": il valore "Light Truck" sono i
+ * pneumatici da furgone (195/75 R16, 523 righe, meta' delle quali gia' in
+ * vendita su Amazon). Un filtro per sottostringa li spegnerebbe tutti.
+ */
+export const DEFAULT_EXCLUDE = { col: "Vehicle", values: ["Truck"] };
+
+/**
+ * Regola di esclusione di un fornitore. Se non e' configurata vale il default
+ * qui sopra; `excludeCol: ""` la disattiva del tutto.
+ */
+export function excludeRuleFor(sup) {
+  const col = sup?.excludeCol === undefined ? DEFAULT_EXCLUDE.col : String(sup.excludeCol || "").trim();
+  if (!col) return null;
+  const raw = sup?.excludeCol === undefined ? DEFAULT_EXCLUDE.values : sup.excludeValues;
+  const values = (Array.isArray(raw) ? raw : String(raw || "").split(","))
+    .map(v => String(v).trim().toLowerCase()).filter(Boolean);
+  if (!values.length) return null;
+  // `explicit` distingue la regola scritta dall'utente da quella di default:
+  // se il CSV di un fornitore non ha affatto quella colonna, avvisare avrebbe
+  // senso solo nel primo caso. Nel secondo e' rumore su ogni conversione.
+  return { col, values: new Set(values), explicit: sup?.excludeCol !== undefined };
+}
+
 export function fCol(headers, name) {
   if (!name) return null;
   return headers.find(h => h.toLowerCase() === String(name).toLowerCase()) || null;
@@ -264,6 +295,8 @@ export function runConversion(config, csvMap, template, opts = {}) {
 
   const em = {};
   let totalRead = 0, skipped = 0, badEan = 0, dup = 0, blocked = 0, belowMinStock = 0, unmappedSkipped = 0;
+  let excludedByFilter = 0;
+  const excludedBreakdown = {};
   const errors = [];
   const tierCounts = {}, tierPriceSum = {};
 
@@ -286,8 +319,24 @@ export function runConversion(config, csvMap, template, opts = {}) {
     }
     if (sup.stockCol && !stC) errors.push(`${sup.name}: colonna stock "${sup.stockCol}" non trovata, uso la quantita' di fallback`);
 
+    // Esclusione per categoria di veicolo (camion). Se la colonna non c'e' nel
+    // CSV il filtro semplicemente non si applica: un listino senza quella
+    // colonna non e' un errore, e bloccare la conversione sarebbe peggio.
+    const exRule = excludeRuleFor(sup);
+    const exC = exRule ? fCol(headers, exRule.col) : null;
+    if (exRule && !exC && exRule.explicit) errors.push(`${sup.name}: colonna "${exRule.col}" non trovata, filtro categoria non applicato`);
+
     for (const row of rows) {
       totalRead++;
+      if (exC) {
+        const v = String(row[exC] ?? "").trim();
+        if (exRule.values.has(v.toLowerCase())) {
+          excludedByFilter++;
+          excludedBreakdown[v] = (excludedBreakdown[v] || 0) + 1;
+          continue;
+        }
+      }
+
       const ean = normalizeEAN(row[enC]);
       const sku = String(row[skC] ?? "").trim();
       const rp = parseFloat(String(row[prC] ?? "0").replace(",", "."));
@@ -397,6 +446,8 @@ export function runConversion(config, csvMap, template, opts = {}) {
       total_skipped: skipped,
       bad_ean: badEan,
       below_min_stock: belowMinStock,
+      excluded_by_filter: excludedByFilter,
+      excluded_breakdown: excludedBreakdown,
       duplicates_resolved: dup,
       blacklisted: blocked,
       with_asin: records.filter(r => r.asin).length,
